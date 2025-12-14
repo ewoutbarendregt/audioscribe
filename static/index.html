@@ -833,9 +833,13 @@
         fetch('/api/version')
             .then(r => r.json())
             .then(data => {
-                document.getElementById('appVersion').textContent = 'v' + data.version;
+                if (data && data.version) {
+                    document.getElementById('appVersion').textContent = 'v' + data.version;
+                }
             })
-            .catch(() => {});
+            .catch(() => {
+                document.getElementById('appVersion').textContent = '';
+            });
     </script>
 </body>
 </html>
