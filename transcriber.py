@@ -125,10 +125,11 @@ def format_timestamp_offset(timestamp_str: str, offset_minutes: int) -> str:
 
 
 def transcribe_chunk_sync(client, file_path: Path, num_speakers: Optional[int] = None,
-                          is_continuation: bool = False) -> tuple[list[TranscriptSegment], str, str, int]:
+                          is_continuation: bool = False,
+                          previous_speaker_descriptions: Optional[str] = None) -> tuple[list[TranscriptSegment], str, str, int, str]:
     """
     Transcribe a single audio chunk using Gemini API (synchronous).
-    Returns: (segments, detected_language, summary, speaker_count)
+    Returns: (segments, detected_language, summary, speaker_count, speaker_descriptions)
     """
     file_ext = file_path.suffix.lower()
     mime_type = MIME_TYPES.get(file_ext)  # Only set for problematic formats
@@ -145,23 +146,39 @@ def transcribe_chunk_sync(client, file_path: Path, num_speakers: Optional[int] =
     # Build the prompt
     speaker_hint = ""
     if num_speakers:
-        speaker_hint = f"There are approximately {num_speakers} speakers in this audio."
+        speaker_hint = f"There are exactly {num_speakers} different speakers in this audio."
 
     continuation_hint = ""
-    if is_continuation:
-        continuation_hint = "This is a continuation of a longer recording. Continue using consistent speaker labels."
+    if is_continuation and previous_speaker_descriptions:
+        continuation_hint = f"""IMPORTANT: This is a continuation of a longer recording.
+The following speakers were identified in previous chunks - you MUST use the same speaker labels for the same voices:
 
-    prompt = f"""Process this audio file and generate a detailed transcription.
+{previous_speaker_descriptions}
+
+Match voices to the speakers above based on their voice characteristics. Use the SAME speaker numbers."""
+
+    prompt = f"""Process this audio file and generate a detailed transcription with accurate speaker diarization.
 
 {speaker_hint}
 {continuation_hint}
 
-Requirements:
-1. Identify distinct speakers and label them consistently (Speaker 1, Speaker 2, etc.). Pay careful attention to voice characteristics, tone, and speaking patterns to distinguish between speakers.
-2. Provide accurate timestamps for each segment (Format: MM:SS).
-3. Detect the primary language of the audio.
-4. Create a brief summary of the conversation IN THE SAME LANGUAGE as the audio (e.g., if the audio is in Dutch, write the summary in Dutch).
-5. Transcribe ALL speech accurately, preserving the original language.
+CRITICAL REQUIREMENTS FOR SPEAKER IDENTIFICATION:
+1. Listen carefully to distinguish EACH unique voice by their characteristics:
+   - Pitch (high, medium, low)
+   - Tone (warm, sharp, nasal, deep, bright)
+   - Speaking pace (fast, slow, measured)
+   - Accent or speech patterns
+   - Voice texture (smooth, gravelly, clear, breathy)
+2. Even similar-sounding voices (e.g., multiple male or female speakers) MUST be distinguished - pay attention to subtle differences.
+3. Label speakers consistently as "Speaker 1", "Speaker 2", etc.
+4. When in doubt between two similar voices, listen for unique speech patterns or verbal habits.
+
+OTHER REQUIREMENTS:
+5. Provide accurate timestamps for each segment (Format: MM:SS).
+6. Detect the primary language of the audio.
+7. Create a brief summary of the conversation IN THE SAME LANGUAGE as the audio.
+8. Transcribe ALL speech accurately, preserving the original language.
+9. Provide a brief description of each speaker's voice characteristics in the speaker_descriptions field.
 
 Output the transcription with clear speaker labels and timestamps."""
 
@@ -188,6 +205,10 @@ Output the transcription with clear speaker labels and timestamps."""
                         type=types.Type.INTEGER,
                         description="Number of distinct speakers identified in the audio"
                     ),
+                    "speaker_descriptions": types.Schema(
+                        type=types.Type.STRING,
+                        description="Description of each speaker's voice characteristics, e.g., 'Speaker 1: Male, deep voice, slow pace. Speaker 2: Male, higher pitch, fast talker. Speaker 3: Female, warm tone.'"
+                    ),
                     "segments": types.Schema(
                         type=types.Type.ARRAY,
                         items=types.Schema(
@@ -210,7 +231,7 @@ Output the transcription with clear speaker labels and timestamps."""
                         ),
                     ),
                 },
-                required=["language", "summary", "speaker_count", "segments"],
+                required=["language", "summary", "speaker_count", "speaker_descriptions", "segments"],
             ),
         ),
     )
@@ -255,12 +276,16 @@ Output the transcription with clear speaker labels and timestamps."""
 
         lang_match = re.search(r'"language"\s*:\s*"([^"]+)"', response.text)
         summary_match = re.search(r'"summary"\s*:\s*"((?:[^"\\]|\\.)*)"', response.text)
+        desc_match = re.search(r'"speaker_descriptions"\s*:\s*"((?:[^"\\]|\\.)*)"', response.text)
         detected_language = lang_match.group(1) if lang_match else "unknown"
         summary = summary_match.group(1) if summary_match else ""
+        speaker_descriptions = desc_match.group(1) if desc_match else ""
         if summary:
             summary = summary.replace('\\"', '"').replace('\\n', '\n').replace('\\\\', '\\')
+        if speaker_descriptions:
+            speaker_descriptions = speaker_descriptions.replace('\\"', '"').replace('\\n', '\n').replace('\\\\', '\\')
 
-        return segments, detected_language, summary, len(set(s.speaker for s in segments if s.speaker))
+        return segments, detected_language, summary, len(set(s.speaker for s in segments if s.speaker)), speaker_descriptions
 
     # Convert to TranscriptSegment objects
     segments = []
@@ -274,8 +299,9 @@ Output the transcription with clear speaker labels and timestamps."""
     detected_language = result.get("language", "unknown")
     summary = result.get("summary", "")
     speaker_count = result.get("speaker_count", 0)
+    speaker_descriptions = result.get("speaker_descriptions", "")
 
-    return segments, detected_language, summary, speaker_count
+    return segments, detected_language, summary, speaker_count, speaker_descriptions
 
 
 # Type alias for progress callback
@@ -330,6 +356,7 @@ async def transcribe_audio_with_progress(
         detected_language = "unknown"
         summaries = []
         total_speaker_count = 0
+        speaker_descriptions = ""  # Track speaker descriptions across chunks
 
         try:
             for i, chunk_path in enumerate(chunks):
@@ -344,14 +371,21 @@ async def transcribe_audio_with_progress(
 
                 # Run sync transcription in thread pool to not block
                 loop = asyncio.get_event_loop()
-                chunk_segments, chunk_lang, chunk_summary, chunk_speakers = await loop.run_in_executor(
+                chunk_segments, chunk_lang, chunk_summary, chunk_speakers, chunk_descriptions = await loop.run_in_executor(
                     None,
-                    transcribe_chunk_sync,
-                    client, chunk_path, num_speakers, (i > 0)
+                    lambda: transcribe_chunk_sync(
+                        client, chunk_path, num_speakers,
+                        is_continuation=(i > 0),
+                        previous_speaker_descriptions=speaker_descriptions if i > 0 else None
+                    )
                 )
 
                 if i == 0 and chunk_lang != "unknown":
                     detected_language = chunk_lang
+
+                # Save speaker descriptions from first chunk to use in subsequent chunks
+                if i == 0 and chunk_descriptions:
+                    speaker_descriptions = chunk_descriptions
 
                 if chunk_summary:
                     summaries.append(chunk_summary)
@@ -397,10 +431,9 @@ async def transcribe_audio_with_progress(
         await report_progress("Transcribing", "AI is processing audio (this may take a minute)...", 40)
 
         loop = asyncio.get_event_loop()
-        segments, detected_language, summary, speaker_count = await loop.run_in_executor(
+        segments, detected_language, summary, speaker_count, _ = await loop.run_in_executor(
             None,
-            transcribe_chunk_sync,
-            client, file_path, num_speakers, False
+            lambda: transcribe_chunk_sync(client, file_path, num_speakers, False, None)
         )
 
         await report_progress("Complete", f"Transcribed {len(segments)} segments from {speaker_count} speakers", 100)
