@@ -1,0 +1,833 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Transcribe audio files with speaker diarization using AI">
+    <meta name="theme-color" content="#6366f1">
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎙️</text></svg>">
+    <title>Audio Transcription</title>
+    <style>
+        :root {
+            --primary: #6366f1;
+            --primary-dark: #4f46e5;
+            --bg: #0f172a;
+            --bg-card: #1e293b;
+            --bg-hover: #334155;
+            --text: #f1f5f9;
+            --text-muted: #94a3b8;
+            --border: #334155;
+            --success: #22c55e;
+            --error: #ef4444;
+            --speaker-1: #22d3ee;
+            --speaker-2: #f472b6;
+            --speaker-3: #a78bfa;
+            --speaker-4: #fb923c;
+            --speaker-5: #4ade80;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 2rem 1rem;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+
+        header h1 {
+            font-size: 2rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+        }
+
+        header p {
+            color: var(--text-muted);
+        }
+
+        .card {
+            background: var(--bg-card);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            border: 1px solid var(--border);
+        }
+
+        .upload-zone {
+            border: 2px dashed var(--border);
+            border-radius: 8px;
+            padding: 3rem 2rem;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .upload-zone:hover,
+        .upload-zone.dragover {
+            border-color: var(--primary);
+            background: rgba(99, 102, 241, 0.1);
+        }
+
+        .upload-zone.has-file {
+            border-color: var(--success);
+            background: rgba(34, 197, 94, 0.1);
+        }
+
+        .upload-icon {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+        }
+
+        .upload-text {
+            font-size: 1.1rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .upload-hint {
+            color: var(--text-muted);
+            font-size: 0.875rem;
+        }
+
+        .file-info {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            padding: 1rem;
+            background: var(--bg);
+            border-radius: 8px;
+            margin-top: 1rem;
+        }
+
+        .file-info .icon {
+            font-size: 2rem;
+        }
+
+        .file-details {
+            flex: 1;
+        }
+
+        .file-name {
+            font-weight: 500;
+            word-break: break-all;
+        }
+
+        .file-size {
+            color: var(--text-muted);
+            font-size: 0.875rem;
+        }
+
+        .file-remove {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            padding: 0.5rem;
+            font-size: 1.25rem;
+        }
+
+        .file-remove:hover {
+            color: var(--error);
+        }
+
+        .options {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+            margin-top: 1rem;
+        }
+
+        .option-group {
+            flex: 1;
+            min-width: 200px;
+        }
+
+        .option-group label {
+            display: block;
+            font-size: 0.875rem;
+            color: var(--text-muted);
+            margin-bottom: 0.5rem;
+        }
+
+        .option-group select,
+        .option-group input {
+            width: 100%;
+            padding: 0.75rem;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            font-size: 1rem;
+        }
+
+        .option-group select:focus,
+        .option-group input:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            padding: 0.875rem 1.5rem;
+            font-size: 1rem;
+            font-weight: 500;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+            width: 100%;
+            margin-top: 1.5rem;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background: var(--primary-dark);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background: var(--bg-hover);
+            color: var(--text);
+        }
+
+        .btn-secondary:hover {
+            background: var(--border);
+        }
+
+        .progress-section {
+            display: none;
+        }
+
+        .progress-section.active {
+            display: block;
+        }
+
+        .progress-bar {
+            height: 4px;
+            background: var(--border);
+            border-radius: 2px;
+            overflow: hidden;
+            margin-bottom: 1rem;
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary), #818cf8);
+            width: 0%;
+            transition: width 0.5s ease-out;
+        }
+
+        .progress-bar-fill.indeterminate {
+            width: 30%;
+            animation: indeterminate 1.5s infinite ease-in-out;
+        }
+
+        @keyframes indeterminate {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(400%); }
+        }
+
+        .progress-info {
+            text-align: center;
+            margin-bottom: 0.5rem;
+        }
+
+        .progress-stage {
+            font-weight: 600;
+            font-size: 1.1rem;
+            color: var(--text);
+            margin-bottom: 0.25rem;
+        }
+
+        .progress-detail {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+
+        .progress-percent {
+            text-align: center;
+            color: var(--primary);
+            font-weight: 600;
+            font-size: 0.9rem;
+            margin-top: 0.5rem;
+        }
+
+        .result-section {
+            display: none;
+        }
+
+        .result-section.active {
+            display: block;
+        }
+
+        .result-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .result-meta {
+            display: flex;
+            gap: 1.5rem;
+            flex-wrap: wrap;
+        }
+
+        .meta-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .meta-label {
+            color: var(--text-muted);
+            font-size: 0.875rem;
+        }
+
+        .meta-value {
+            font-weight: 500;
+        }
+
+        .result-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .summary-box {
+            background: var(--bg);
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            border-left: 3px solid var(--primary);
+        }
+
+        .summary-title {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+            margin-bottom: 0.5rem;
+        }
+
+        .transcript-container {
+            max-height: 500px;
+            overflow-y: auto;
+            background: var(--bg);
+            border-radius: 8px;
+            padding: 1rem;
+        }
+
+        .segment {
+            padding: 0.75rem;
+            border-radius: 6px;
+            margin-bottom: 0.5rem;
+            background: var(--bg-card);
+        }
+
+        .segment-header {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .segment-speaker {
+            font-weight: 600;
+            font-size: 0.875rem;
+        }
+
+        .segment-timestamp {
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            font-family: monospace;
+        }
+
+        .segment-text {
+            color: var(--text);
+        }
+
+        .speaker-1 { color: var(--speaker-1); }
+        .speaker-2 { color: var(--speaker-2); }
+        .speaker-3 { color: var(--speaker-3); }
+        .speaker-4 { color: var(--speaker-4); }
+        .speaker-5 { color: var(--speaker-5); }
+
+        .error-message {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid var(--error);
+            color: var(--error);
+            padding: 1rem;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+            display: none;
+        }
+
+        .error-message.active {
+            display: block;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        footer {
+            text-align: center;
+            padding: 2rem 1rem;
+            color: var(--text-muted);
+            font-size: 0.875rem;
+        }
+
+        @media (max-width: 600px) {
+            .container {
+                padding: 1rem;
+            }
+
+            header h1 {
+                font-size: 1.5rem;
+            }
+
+            .upload-zone {
+                padding: 2rem 1rem;
+            }
+
+            .result-header {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .result-actions {
+                width: 100%;
+            }
+
+            .result-actions .btn {
+                flex: 1;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎙️ Audio Transcription</h1>
+            <p>Upload an audio file to transcribe with speaker diarization</p>
+        </header>
+
+        <div class="error-message" id="errorMessage"></div>
+
+        <!-- Upload Section -->
+        <div class="card" id="uploadSection">
+            <div class="upload-zone" id="uploadZone">
+                <div class="upload-icon">📁</div>
+                <div class="upload-text">Drop your audio file here</div>
+                <div class="upload-hint">or click to browse (MP3, M4A, WAV, FLAC, OGG - max 100MB)</div>
+            </div>
+            <input type="file" id="fileInput" accept=".mp3,.m4a,.wav,.flac,.ogg,.webm,.mp4,.aac" hidden>
+
+            <div class="file-info hidden" id="fileInfo">
+                <span class="icon">🎵</span>
+                <div class="file-details">
+                    <div class="file-name" id="fileName"></div>
+                    <div class="file-size" id="fileSize"></div>
+                </div>
+                <button class="file-remove" id="fileRemove" title="Remove file">&times;</button>
+            </div>
+
+            <div class="options">
+                <div class="option-group">
+                    <label for="speakerCount">Expected speakers (optional)</label>
+                    <select id="speakerCount">
+                        <option value="">Auto-detect</option>
+                        <option value="1">1 speaker</option>
+                        <option value="2">2 speakers</option>
+                        <option value="3">3 speakers</option>
+                        <option value="4">4 speakers</option>
+                        <option value="5">5+ speakers</option>
+                    </select>
+                </div>
+                <div class="option-group">
+                    <label for="outputFormat">Output format</label>
+                    <select id="outputFormat">
+                        <option value="text">Text</option>
+                        <option value="json">JSON</option>
+                    </select>
+                </div>
+            </div>
+
+            <button class="btn btn-primary" id="transcribeBtn" disabled>
+                <span>✨</span> Transcribe
+            </button>
+        </div>
+
+        <!-- Progress Section -->
+        <div class="card progress-section" id="progressSection">
+            <div class="progress-info">
+                <div class="progress-stage" id="progressStage">Starting...</div>
+                <div class="progress-detail" id="progressDetail">Preparing your audio file</div>
+            </div>
+            <div class="progress-bar">
+                <div class="progress-bar-fill" id="progressBar"></div>
+            </div>
+            <div class="progress-percent" id="progressPercent">0%</div>
+        </div>
+
+        <!-- Result Section -->
+        <div class="card result-section" id="resultSection">
+            <div class="result-header">
+                <div class="result-meta">
+                    <div class="meta-item">
+                        <span class="meta-label">Language:</span>
+                        <span class="meta-value" id="resultLanguage">-</span>
+                    </div>
+                    <div class="meta-item">
+                        <span class="meta-label">Speakers:</span>
+                        <span class="meta-value" id="resultSpeakers">-</span>
+                    </div>
+                    <div class="meta-item">
+                        <span class="meta-label">Segments:</span>
+                        <span class="meta-value" id="resultSegments">-</span>
+                    </div>
+                </div>
+                <div class="result-actions">
+                    <button class="btn btn-secondary" id="downloadTxt">📄 TXT</button>
+                    <button class="btn btn-secondary" id="downloadJson">📋 JSON</button>
+                    <button class="btn btn-secondary" id="newTranscript">🔄 New</button>
+                </div>
+            </div>
+
+            <div class="summary-box" id="summaryBox">
+                <div class="summary-title">Summary</div>
+                <div id="summaryText"></div>
+            </div>
+
+            <div class="transcript-container" id="transcriptContainer"></div>
+        </div>
+    </div>
+
+    <footer>
+        Powered by Gemini AI
+    </footer>
+
+    <script>
+        // State
+        let selectedFile = null;
+        let transcriptData = null;
+
+        // DOM Elements
+        const uploadZone = document.getElementById('uploadZone');
+        const fileInput = document.getElementById('fileInput');
+        const fileInfo = document.getElementById('fileInfo');
+        const fileName = document.getElementById('fileName');
+        const fileSize = document.getElementById('fileSize');
+        const fileRemove = document.getElementById('fileRemove');
+        const speakerCount = document.getElementById('speakerCount');
+        const outputFormat = document.getElementById('outputFormat');
+        const transcribeBtn = document.getElementById('transcribeBtn');
+        const uploadSection = document.getElementById('uploadSection');
+        const progressSection = document.getElementById('progressSection');
+        const progressBar = document.getElementById('progressBar');
+        const progressStage = document.getElementById('progressStage');
+        const progressDetail = document.getElementById('progressDetail');
+        const progressPercent = document.getElementById('progressPercent');
+        const resultSection = document.getElementById('resultSection');
+        const errorMessage = document.getElementById('errorMessage');
+
+        // File upload handling
+        uploadZone.addEventListener('click', () => fileInput.click());
+
+        uploadZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadZone.classList.add('dragover');
+        });
+
+        uploadZone.addEventListener('dragleave', () => {
+            uploadZone.classList.remove('dragover');
+        });
+
+        uploadZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadZone.classList.remove('dragover');
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                handleFile(files[0]);
+            }
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFile(e.target.files[0]);
+            }
+        });
+
+        fileRemove.addEventListener('click', (e) => {
+            e.stopPropagation();
+            clearFile();
+        });
+
+        function handleFile(file) {
+            const validTypes = ['.mp3', '.m4a', '.wav', '.flac', '.ogg', '.webm', '.mp4', '.aac'];
+            const ext = '.' + file.name.split('.').pop().toLowerCase();
+
+            if (!validTypes.includes(ext)) {
+                showError('Unsupported file format. Please use MP3, M4A, WAV, FLAC, OGG, or AAC.');
+                return;
+            }
+
+            if (file.size > 100 * 1024 * 1024) {
+                showError('File too large. Maximum size is 100MB.');
+                return;
+            }
+
+            selectedFile = file;
+            fileName.textContent = file.name;
+            fileSize.textContent = formatFileSize(file.size);
+            fileInfo.classList.remove('hidden');
+            uploadZone.classList.add('has-file');
+            transcribeBtn.disabled = false;
+            hideError();
+        }
+
+        function clearFile() {
+            selectedFile = null;
+            fileInput.value = '';
+            fileInfo.classList.add('hidden');
+            uploadZone.classList.remove('has-file');
+            transcribeBtn.disabled = true;
+        }
+
+        function formatFileSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        // Transcription
+        transcribeBtn.addEventListener('click', startTranscription);
+
+        function updateProgress(stage, detail, percent) {
+            progressStage.textContent = stage;
+            progressDetail.textContent = detail;
+            progressPercent.textContent = `${percent}%`;
+            progressBar.style.width = `${percent}%`;
+            progressBar.classList.remove('indeterminate');
+        }
+
+        async function startTranscription() {
+            if (!selectedFile) return;
+
+            hideError();
+            uploadSection.classList.add('hidden');
+            progressSection.classList.add('active');
+
+            // Initial state
+            updateProgress('Uploading', 'Sending audio file to server...', 0);
+
+            const formData = new FormData();
+            formData.append('file', selectedFile);
+            formData.append('output_format', outputFormat.value);
+            if (speakerCount.value) {
+                formData.append('speakers', speakerCount.value);
+            }
+
+            try {
+                // Use fetch with SSE response handling
+                const response = await fetch('/api/transcribe', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Transcription failed');
+                }
+
+                // Read SSE stream
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+
+                    // Process complete SSE messages
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || ''; // Keep incomplete line in buffer
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const data = JSON.parse(line.slice(6));
+
+                                if (data.type === 'progress') {
+                                    updateProgress(data.stage, data.detail, data.percent);
+                                } else if (data.type === 'result') {
+                                    transcriptData = data;
+                                    updateProgress('Complete', `Transcribed ${data.segments?.length || 0} segments`, 100);
+                                    setTimeout(() => showResults(), 500);
+                                } else if (data.type === 'error') {
+                                    throw new Error(data.message);
+                                }
+                            } catch (e) {
+                                if (e.message && !e.message.includes('JSON')) {
+                                    throw e;
+                                }
+                            }
+                        }
+                    }
+                }
+
+            } catch (error) {
+                showError(error.message);
+                resetToUpload();
+            }
+        }
+
+        function showResults() {
+            progressSection.classList.remove('active');
+            resultSection.classList.add('active');
+
+            document.getElementById('resultLanguage').textContent = transcriptData.language || '-';
+            document.getElementById('resultSpeakers').textContent = transcriptData.speaker_count || '-';
+            document.getElementById('resultSegments').textContent = transcriptData.segments?.length || '-';
+
+            // Summary
+            const summaryBox = document.getElementById('summaryBox');
+            const summaryText = document.getElementById('summaryText');
+            if (transcriptData.summary) {
+                summaryText.textContent = transcriptData.summary;
+                summaryBox.classList.remove('hidden');
+            } else {
+                summaryBox.classList.add('hidden');
+            }
+
+            // Transcript
+            const container = document.getElementById('transcriptContainer');
+            container.innerHTML = '';
+
+            if (transcriptData.segments) {
+                transcriptData.segments.forEach(seg => {
+                    const div = document.createElement('div');
+                    div.className = 'segment';
+
+                    const speakerNum = seg.speaker ? seg.speaker.match(/\d+/)?.[0] : null;
+                    const speakerClass = speakerNum ? `speaker-${Math.min(parseInt(speakerNum), 5)}` : '';
+
+                    div.innerHTML = `
+                        <div class="segment-header">
+                            <span class="segment-speaker ${speakerClass}">${seg.speaker || 'Speaker'}</span>
+                            <span class="segment-timestamp">${seg.timestamp}</span>
+                        </div>
+                        <div class="segment-text">${escapeHtml(seg.text)}</div>
+                    `;
+                    container.appendChild(div);
+                });
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Download handlers
+        document.getElementById('downloadTxt').addEventListener('click', () => {
+            if (!transcriptData) return;
+
+            let content = `Language: ${transcriptData.language}\n`;
+            content += `Speakers: ${transcriptData.speaker_count}\n`;
+            content += '='.repeat(50) + '\n\n';
+
+            if (transcriptData.summary) {
+                content += 'SUMMARY:\n' + transcriptData.summary + '\n\n';
+                content += '='.repeat(50) + '\n\n';
+            }
+
+            transcriptData.segments.forEach(seg => {
+                content += `${seg.speaker || 'Speaker'} [${seg.timestamp}]: ${seg.text}\n`;
+            });
+
+            downloadFile(content, 'transcript.txt', 'text/plain');
+        });
+
+        document.getElementById('downloadJson').addEventListener('click', () => {
+            if (!transcriptData) return;
+            downloadFile(JSON.stringify(transcriptData, null, 2), 'transcript.json', 'application/json');
+        });
+
+        function downloadFile(content, filename, type) {
+            const blob = new Blob([content], { type });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        // New transcript
+        document.getElementById('newTranscript').addEventListener('click', () => {
+            transcriptData = null;
+            clearFile();
+            resetToUpload();
+        });
+
+        function resetToUpload() {
+            progressSection.classList.remove('active');
+            resultSection.classList.remove('active');
+            uploadSection.classList.remove('hidden');
+            progressBar.style.width = '0%';
+        }
+
+        // Error handling
+        function showError(message) {
+            errorMessage.textContent = message;
+            errorMessage.classList.add('active');
+        }
+
+        function hideError() {
+            errorMessage.classList.remove('active');
+        }
+
+        // PWA: Register service worker
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/sw.js').catch(() => {});
+        }
+    </script>
+</body>
+</html>
