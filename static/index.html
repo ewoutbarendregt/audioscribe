@@ -535,7 +535,7 @@
     </div>
 
     <footer>
-        Powered by Gemini AI
+        Powered by Gemini AI | <span id="appVersion">v...</span>
     </footer>
 
     <script>
@@ -828,6 +828,14 @@
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('/sw.js').catch(() => {});
         }
+
+        // Fetch and display version
+        fetch('/api/version')
+            .then(r => r.json())
+            .then(data => {
+                document.getElementById('appVersion').textContent = 'v' + data.version;
+            })
+            .catch(() => {});
     </script>
 </body>
 </html>

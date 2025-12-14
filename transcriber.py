@@ -27,6 +27,12 @@ except ImportError:
 # Maximum chunk duration in minutes (Gemini works best with <15 min chunks)
 MAX_CHUNK_MINUTES = 15
 
+# MIME types for formats that Gemini can't auto-detect (especially .m4a on Cloud Run)
+MIME_TYPES = {
+    '.m4a': 'audio/mp4',
+    '.aac': 'audio/aac',
+}
+
 
 @dataclass
 class TranscriptSegment:
@@ -124,10 +130,16 @@ def transcribe_chunk_sync(client, file_path: Path, num_speakers: Optional[int] =
     Transcribe a single audio chunk using Gemini API (synchronous).
     Returns: (segments, detected_language, summary, speaker_count)
     """
-    print(f"[UPLOAD] Starting upload: {file_path.name}")
+    file_ext = file_path.suffix.lower()
+    mime_type = MIME_TYPES.get(file_ext)  # Only set for problematic formats
 
-    # Upload the audio file - let Gemini auto-detect MIME type (matches original behavior)
-    uploaded_file = client.files.upload(file=str(file_path))
+    print(f"[UPLOAD] Starting upload: {file_path.name}" + (f" ({mime_type})" if mime_type else ""))
+
+    # Upload the audio file - only specify MIME type for formats Gemini can't auto-detect
+    if mime_type:
+        uploaded_file = client.files.upload(file=str(file_path), config={'mimeType': mime_type})
+    else:
+        uploaded_file = client.files.upload(file=str(file_path))
     print(f"[UPLOAD] Upload complete: {uploaded_file.name}")
 
     # Build the prompt

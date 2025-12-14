@@ -23,10 +23,13 @@ from fastapi.staticfiles import StaticFiles
 
 from transcriber import transcribe_audio_with_progress, TranscriptionResult
 
+# App version - increment with each deployment
+APP_VERSION = "1.0.4"
+
 app = FastAPI(
     title="Audio Transcription",
     description="Transcribe audio files with speaker diarization using Gemini AI",
-    version="1.0.0"
+    version=APP_VERSION
 )
 
 # Supported audio formats
@@ -53,8 +56,15 @@ async def health_check():
     """Health check endpoint for Cloud Run."""
     return {
         "status": "healthy",
+        "version": APP_VERSION,
         "api_key_configured": bool(os.environ.get("GEMINI_API_KEY"))
     }
+
+
+@app.get("/api/version")
+async def get_version():
+    """Get app version."""
+    return {"version": APP_VERSION}
 
 
 @app.post("/api/transcribe")
