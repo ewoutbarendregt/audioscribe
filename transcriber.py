@@ -176,7 +176,7 @@ CRITICAL REQUIREMENTS FOR SPEAKER IDENTIFICATION:
 OTHER REQUIREMENTS:
 5. Provide accurate timestamps for each segment (Format: MM:SS).
 6. Detect the primary language of the audio.
-7. Create a brief summary of the conversation IN THE SAME LANGUAGE as the audio.
+7. IMPORTANT: Create a brief summary of the conversation. The summary MUST be written in the SAME LANGUAGE as the spoken audio (e.g., if the audio is in Dutch, write the summary in Dutch; if in Spanish, write in Spanish).
 8. Transcribe ALL speech accurately, preserving the original language.
 9. Provide a brief description of each speaker's voice characteristics in the speaker_descriptions field.
 
@@ -199,7 +199,7 @@ Output the transcription with clear speaker labels and timestamps."""
                     ),
                     "summary": types.Schema(
                         type=types.Type.STRING,
-                        description="A brief summary of the conversation in the same language as the audio"
+                        description="A brief summary of the conversation. MUST be written in the same language as the spoken audio (e.g., Dutch audio = Dutch summary)"
                     ),
                     "speaker_count": types.Schema(
                         type=types.Type.INTEGER,
