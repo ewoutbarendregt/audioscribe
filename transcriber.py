@@ -8,6 +8,7 @@ automatic chunking for long audio files.
 import asyncio
 import json
 import os
+import queue
 import re
 import subprocess
 import tempfile
@@ -126,27 +127,34 @@ def format_timestamp_offset(timestamp_str: str, offset_minutes: int) -> str:
 
 def transcribe_chunk_sync(client, file_path: Path, num_speakers: Optional[int] = None,
                           is_continuation: bool = False,
-                          previous_speaker_descriptions: Optional[str] = None) -> tuple[list[TranscriptSegment], str, str, int, str]:
+                          previous_speaker_descriptions: Optional[str] = None,
+                          debug_log: Optional[callable] = None) -> tuple[list[TranscriptSegment], str, str, int, str]:
     """
     Transcribe a single audio chunk using Gemini API (synchronous).
     Returns: (segments, detected_language, summary, speaker_count, speaker_descriptions)
     """
+    def log(message: str):
+        print(f"[DEBUG] {message}")
+        if debug_log:
+            debug_log(message)
+
     file_ext = file_path.suffix.lower()
     mime_type = MIME_TYPES.get(file_ext)  # Only set for problematic formats
 
-    print(f"[UPLOAD] Starting upload: {file_path.name}" + (f" ({mime_type})" if mime_type else ""))
+    log(f"Starting upload: {file_path.name}" + (f" (MIME: {mime_type})" if mime_type else ""))
 
     # Upload the audio file - only specify MIME type for formats Gemini can't auto-detect
     if mime_type:
         uploaded_file = client.files.upload(file=str(file_path), config={'mimeType': mime_type})
     else:
         uploaded_file = client.files.upload(file=str(file_path))
-    print(f"[UPLOAD] Upload complete: {uploaded_file.name}")
+    log(f"Upload complete: {uploaded_file.name}")
 
     # Build the prompt
     speaker_hint = ""
     if num_speakers:
         speaker_hint = f"There are exactly {num_speakers} different speakers in this audio."
+        log(f"Speaker hint: {speaker_hint}")
 
     continuation_hint = ""
     if is_continuation and previous_speaker_descriptions:
@@ -156,6 +164,7 @@ The following speakers were identified in previous chunks - you MUST use the sam
 {previous_speaker_descriptions}
 
 Match voices to the speakers above based on their voice characteristics. Use the SAME speaker numbers."""
+        log(f"Continuation mode: using speaker descriptions from previous chunk")
 
     prompt = f"""Process this audio file and generate a detailed transcription with accurate speaker diarization.
 
@@ -182,7 +191,9 @@ OTHER REQUIREMENTS:
 
 Output the transcription with clear speaker labels and timestamps."""
 
-    print(f"[API] Calling Gemini API for transcription...")
+    log("Sending prompt to Gemini API (model: gemini-2.5-flash)...")
+    log(f"Prompt length: {len(prompt)} characters")
+    log("Waiting for API response (this may take 30-60 seconds)...")
 
     # Use structured output for consistent JSON responses
     response = client.models.generate_content(
@@ -236,11 +247,13 @@ Output the transcription with clear speaker labels and timestamps."""
         ),
     )
 
-    print(f"[API] Gemini API response received ({len(response.text)} chars)")
+    log(f"API response received ({len(response.text)} characters)")
+    log("Parsing JSON response...")
 
     # Clean up uploaded file
     try:
         client.files.delete(name=uploaded_file.name)
+        log("Cleaned up uploaded file from Gemini")
     except Exception:
         pass
 
@@ -248,7 +261,9 @@ Output the transcription with clear speaker labels and timestamps."""
     result = None
     try:
         result = json.loads(response.text)
+        log("JSON parsed successfully")
     except json.JSONDecodeError:
+        log("JSON parse failed, attempting to salvage partial JSON...")
         # Try to salvage partial JSON
         try:
             text = response.text
@@ -261,14 +276,17 @@ Output the transcription with clear speaker labels and timestamps."""
                     fixed_text += ']' * open_brackets
                     fixed_text += '}' * open_braces
                     result = json.loads(fixed_text)
+                    log("Partial JSON salvaged successfully")
         except json.JSONDecodeError:
-            pass
+            log("Partial JSON salvage failed")
 
     if result is None:
         # Last resort: regex extraction
+        log("Using regex extraction as fallback...")
         segments = []
         segment_pattern = r'\{\s*"speaker"\s*:\s*"([^"]+)"\s*,\s*"timestamp"\s*:\s*"([^"]+)"\s*,\s*"text"\s*:\s*"((?:[^"\\]|\\.)*)"\s*\}'
         matches = re.findall(segment_pattern, response.text)
+        log(f"Regex found {len(matches)} segments")
 
         for speaker, timestamp, text in matches:
             text = text.replace('\\"', '"').replace('\\n', '\n').replace('\\\\', '\\')
@@ -285,6 +303,7 @@ Output the transcription with clear speaker labels and timestamps."""
         if speaker_descriptions:
             speaker_descriptions = speaker_descriptions.replace('\\"', '"').replace('\\n', '\n').replace('\\\\', '\\')
 
+        log(f"Extracted {len(segments)} segments via regex, language: {detected_language}")
         return segments, detected_language, summary, len(set(s.speaker for s in segments if s.speaker)), speaker_descriptions
 
     # Convert to TranscriptSegment objects
@@ -301,39 +320,73 @@ Output the transcription with clear speaker labels and timestamps."""
     speaker_count = result.get("speaker_count", 0)
     speaker_descriptions = result.get("speaker_descriptions", "")
 
+    log(f"Parsed {len(segments)} segments, language: {detected_language}, speakers: {speaker_count}")
+    if speaker_descriptions:
+        log(f"Speaker descriptions: {speaker_descriptions}")
+
     return segments, detected_language, summary, speaker_count, speaker_descriptions
 
 
-# Type alias for progress callback
+# Type alias for callbacks
 ProgressCallback = Optional[callable]
+DebugCallback = Optional[callable]
 
 
 async def transcribe_audio_with_progress(
     file_path: Path,
     num_speakers: Optional[int] = None,
-    progress_callback: ProgressCallback = None
+    progress_callback: ProgressCallback = None,
+    debug_callback: DebugCallback = None
 ) -> TranscriptionResult:
     """
     Transcribe audio using Gemini API with speaker diarization.
     Automatically chunks long audio files.
     Sends progress updates via callback.
     """
+    # Thread-safe queue for real-time debug messages from sync code
+    debug_queue = queue.Queue()
+
     async def report_progress(stage: str, detail: str = "", percent: int = 0):
         print(f"[PROGRESS] {percent}% - {stage}: {detail}")  # Console logging
         if progress_callback:
             await progress_callback(stage, detail, percent)
 
+    async def report_debug(message: str):
+        print(f"[DEBUG] {message}")  # Console logging
+        if debug_callback:
+            await debug_callback(message)
+
+    def sync_debug_log(message: str):
+        """Thread-safe debug logging from sync functions"""
+        print(f"[DEBUG] {message}")
+        debug_queue.put(message)
+
+    async def drain_debug_queue():
+        """Drain and send all pending debug messages"""
+        while not debug_queue.empty():
+            try:
+                msg = debug_queue.get_nowait()
+                if debug_callback:
+                    await debug_callback(msg)
+            except queue.Empty:
+                break
+
     api_key = os.environ.get('GEMINI_API_KEY')
     if not api_key:
         raise ValueError("GEMINI_API_KEY environment variable not set")
 
+    await report_debug(f"Input file: {file_path.name} ({file_path.stat().st_size / 1024 / 1024:.2f} MB)")
     await report_progress("Connecting", "Initializing Gemini API...", 10)
+    await report_debug("Connecting to Gemini API...")
     client = genai.Client(api_key=api_key)
+    await report_debug("Gemini API client initialized")
 
     # Get audio duration
     await report_progress("Analyzing", "Checking audio duration...", 15)
+    await report_debug("Detecting audio duration using ffprobe...")
     duration = get_audio_duration_ffprobe(file_path)
     if duration is None:
+        await report_debug("ffprobe failed, trying pydub...")
         duration = get_audio_duration_pydub(file_path)
 
     duration_str = ""
@@ -341,16 +394,22 @@ async def transcribe_audio_with_progress(
         mins = int(duration // 60)
         secs = int(duration % 60)
         duration_str = f" ({mins}:{secs:02d})"
+        await report_debug(f"Audio duration: {mins}:{secs:02d} ({duration:.1f} seconds)")
+    else:
+        await report_debug("Could not determine audio duration")
 
     # Check if we need to split the audio
     duration_minutes = (duration or 0) / 60
     needs_chunking = duration_minutes > MAX_CHUNK_MINUTES and PYDUB_AVAILABLE
+    await report_debug(f"Chunking needed: {needs_chunking} (threshold: {MAX_CHUNK_MINUTES} min)")
 
     if needs_chunking:
         # Split and process chunks
         num_chunks = int(duration_minutes / MAX_CHUNK_MINUTES) + 1
+        await report_debug(f"Splitting audio into {num_chunks} chunks of {MAX_CHUNK_MINUTES} minutes each")
         await report_progress("Splitting", f"Splitting into {num_chunks} chunks...", 20)
         chunks = split_audio_into_chunks(file_path, MAX_CHUNK_MINUTES)
+        await report_debug(f"Created {len(chunks)} chunk files")
 
         all_segments = []
         detected_language = "unknown"
@@ -363,22 +422,35 @@ async def transcribe_audio_with_progress(
                 chunk_num = i + 1
                 base_percent = 25 + int((i / len(chunks)) * 65)
 
+                await report_debug(f"--- Processing chunk {chunk_num}/{len(chunks)} ---")
                 await report_progress(
                     "Transcribing",
                     f"Processing chunk {chunk_num}/{len(chunks)}...",
                     base_percent
                 )
 
-                # Run sync transcription in thread pool to not block
+                # Run sync transcription in thread pool with periodic queue draining
                 loop = asyncio.get_event_loop()
-                chunk_segments, chunk_lang, chunk_summary, chunk_speakers, chunk_descriptions = await loop.run_in_executor(
-                    None,
-                    lambda: transcribe_chunk_sync(
-                        client, chunk_path, num_speakers,
-                        is_continuation=(i > 0),
-                        previous_speaker_descriptions=speaker_descriptions if i > 0 else None
+
+                # Create a task that periodically drains the debug queue
+                async def run_with_debug_streaming():
+                    future = loop.run_in_executor(
+                        None,
+                        lambda: transcribe_chunk_sync(
+                            client, chunk_path, num_speakers,
+                            is_continuation=(i > 0),
+                            previous_speaker_descriptions=speaker_descriptions if i > 0 else None,
+                            debug_log=sync_debug_log
+                        )
                     )
-                )
+                    # Poll for debug messages while waiting
+                    while not future.done():
+                        await drain_debug_queue()
+                        await asyncio.sleep(0.1)
+                    await drain_debug_queue()
+                    return await future
+
+                chunk_segments, chunk_lang, chunk_summary, chunk_speakers, chunk_descriptions = await run_with_debug_streaming()
 
                 if i == 0 and chunk_lang != "unknown":
                     detected_language = chunk_lang
@@ -426,15 +498,27 @@ async def transcribe_audio_with_progress(
 
     else:
         # Process single file
+        await report_debug("Processing as single file (no chunking needed)")
         await report_progress("Uploading", f"Sending audio to Gemini{duration_str}...", 25)
 
         await report_progress("Transcribing", "AI is processing audio (this may take a minute)...", 40)
 
+        # Run sync transcription in thread pool with periodic queue draining
         loop = asyncio.get_event_loop()
-        segments, detected_language, summary, speaker_count, _ = await loop.run_in_executor(
-            None,
-            lambda: transcribe_chunk_sync(client, file_path, num_speakers, False, None)
-        )
+
+        async def run_with_debug_streaming():
+            future = loop.run_in_executor(
+                None,
+                lambda: transcribe_chunk_sync(client, file_path, num_speakers, False, None, sync_debug_log)
+            )
+            # Poll for debug messages while waiting
+            while not future.done():
+                await drain_debug_queue()
+                await asyncio.sleep(0.1)
+            await drain_debug_queue()
+            return await future
+
+        segments, detected_language, summary, speaker_count, _ = await run_with_debug_streaming()
 
         await report_progress("Complete", f"Transcribed {len(segments)} segments from {speaker_count} speakers", 100)
 

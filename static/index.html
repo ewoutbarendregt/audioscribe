@@ -401,6 +401,41 @@
             display: none !important;
         }
 
+        .debug-log {
+            margin-top: 1rem;
+            background: var(--bg);
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            overflow: hidden;
+        }
+
+        .debug-log-header {
+            padding: 0.5rem 1rem;
+            background: var(--bg-hover);
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: var(--text-muted);
+        }
+
+        .debug-log-content {
+            padding: 0.75rem 1rem;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 0.8rem;
+            line-height: 1.5;
+        }
+
+        .debug-log-content div {
+            color: var(--text-muted);
+            padding: 0.125rem 0;
+        }
+
+        .debug-log-content div::before {
+            content: "> ";
+            color: var(--primary);
+        }
+
         footer {
             text-align: center;
             padding: 2rem 1rem;
@@ -482,6 +517,12 @@
                         <option value="json">JSON</option>
                     </select>
                 </div>
+                <div class="option-group" style="display: flex; align-items: flex-end;">
+                    <label class="checkbox-label" style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                        <input type="checkbox" id="debugMode" style="width: auto;" checked>
+                        <span>Show activity log</span>
+                    </label>
+                </div>
             </div>
 
             <button class="btn btn-primary" id="transcribeBtn" disabled>
@@ -499,6 +540,10 @@
                 <div class="progress-bar-fill" id="progressBar"></div>
             </div>
             <div class="progress-percent" id="progressPercent">0%</div>
+            <div class="debug-log" id="debugLog">
+                <div class="debug-log-header">Currently doing:</div>
+                <div class="debug-log-content" id="debugLogContent"></div>
+            </div>
         </div>
 
         <!-- Result Section -->
@@ -531,6 +576,11 @@
             </div>
 
             <div class="transcript-container" id="transcriptContainer"></div>
+
+            <div class="debug-log" id="resultDebugLog" style="margin-top: 1rem;">
+                <div class="debug-log-header">Activity log</div>
+                <div class="debug-log-content" id="resultDebugLogContent"></div>
+            </div>
         </div>
     </div>
 
@@ -652,9 +702,22 @@
             // Initial state
             updateProgress('Uploading', 'Sending audio file to server...', 0);
 
+            const debugMode = document.getElementById('debugMode').checked;
+            const debugLog = document.getElementById('debugLog');
+            const debugLogContent = document.getElementById('debugLogContent');
+
+            // Show/hide debug log based on checkbox, clear previous content
+            debugLogContent.innerHTML = '';
+            if (debugMode) {
+                debugLog.classList.remove('hidden');
+            } else {
+                debugLog.classList.add('hidden');
+            }
+
             const formData = new FormData();
             formData.append('file', selectedFile);
             formData.append('output_format', outputFormat.value);
+            formData.append('debug', debugMode);
             if (speakerCount.value) {
                 formData.append('speakers', speakerCount.value);
             }
@@ -693,6 +756,12 @@
 
                                 if (data.type === 'progress') {
                                     updateProgress(data.stage, data.detail, data.percent);
+                                } else if (data.type === 'debug') {
+                                    // Add debug message to log
+                                    const msgDiv = document.createElement('div');
+                                    msgDiv.textContent = data.message;
+                                    debugLogContent.appendChild(msgDiv);
+                                    debugLogContent.scrollTop = debugLogContent.scrollHeight;
                                 } else if (data.type === 'result') {
                                     transcriptData = data;
                                     updateProgress('Complete', `Transcribed ${data.segments?.length || 0} segments`, 100);
@@ -716,6 +785,18 @@
         }
 
         function showResults() {
+            // Copy activity log to result section before switching views
+            const debugLogContent = document.getElementById('debugLogContent');
+            const resultDebugLogContent = document.getElementById('resultDebugLogContent');
+            const resultDebugLog = document.getElementById('resultDebugLog');
+
+            if (debugLogContent.innerHTML) {
+                resultDebugLogContent.innerHTML = debugLogContent.innerHTML;
+                resultDebugLog.classList.remove('hidden');
+            } else {
+                resultDebugLog.classList.add('hidden');
+            }
+
             progressSection.classList.remove('active');
             resultSection.classList.add('active');
 

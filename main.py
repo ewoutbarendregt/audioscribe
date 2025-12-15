@@ -24,7 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from transcriber import transcribe_audio_with_progress, TranscriptionResult
 
 # App version - increment with each deployment
-APP_VERSION = "1.0.7"
+APP_VERSION = "1.1.0"
 
 app = FastAPI(
     title="Audio Transcription",
@@ -71,7 +71,8 @@ async def get_version():
 async def transcribe(
     file: UploadFile = File(...),
     speakers: Optional[int] = Form(None),
-    output_format: str = Form("text")
+    output_format: str = Form("text"),
+    debug: bool = Form(False)
 ):
     """
     Transcribe an uploaded audio file with streaming progress updates.
@@ -131,22 +132,27 @@ async def transcribe(
             progress_queue = asyncio.Queue()
 
             async def progress_callback(stage: str, detail: str = "", percent: int = 0):
-                await progress_queue.put({"stage": stage, "detail": detail, "percent": percent})
+                await progress_queue.put({"type": "progress", "stage": stage, "detail": detail, "percent": percent})
+
+            async def debug_callback(message: str):
+                if debug:
+                    await progress_queue.put({"type": "debug", "message": message})
 
             # Start transcription in background
             transcribe_task = asyncio.create_task(
                 transcribe_audio_with_progress(
                     file_path=temp_path,
                     num_speakers=speakers,
-                    progress_callback=progress_callback
+                    progress_callback=progress_callback,
+                    debug_callback=debug_callback
                 )
             )
 
             # Stream progress updates while transcription runs
             while not transcribe_task.done():
                 try:
-                    progress = await asyncio.wait_for(progress_queue.get(), timeout=0.5)
-                    event_data = json.dumps({"type": "progress", **progress})
+                    event = await asyncio.wait_for(progress_queue.get(), timeout=0.5)
+                    event_data = json.dumps(event)
                     yield f"data: {event_data}\n\n"
                 except asyncio.TimeoutError:
                     pass
@@ -154,10 +160,10 @@ async def transcribe(
             # Get result
             result = await transcribe_task
 
-            # Drain any remaining progress updates
+            # Drain any remaining progress/debug updates
             while not progress_queue.empty():
-                progress = await progress_queue.get()
-                event_data = json.dumps({"type": "progress", **progress})
+                event = await progress_queue.get()
+                event_data = json.dumps(event)
                 yield f"data: {event_data}\n\n"
 
             # Send final result
