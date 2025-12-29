@@ -485,7 +485,7 @@
             <div class="upload-zone" id="uploadZone">
                 <div class="upload-icon">📁</div>
                 <div class="upload-text">Drop your audio file here</div>
-                <div class="upload-hint">or click to browse (MP3, M4A, WAV, FLAC, OGG - max 100MB)</div>
+                <div class="upload-hint">or click to browse (MP3, M4A, WAV, FLAC, OGG)</div>
             </div>
             <input type="file" id="fileInput" accept=".mp3,.m4a,.wav,.flac,.ogg,.webm,.mp4,.aac" hidden>
 
@@ -592,6 +592,11 @@
         // State
         let selectedFile = null;
         let transcriptData = null;
+        let uploadConfig = {
+            max_direct_upload: 30 * 1024 * 1024,
+            max_file_size: 30 * 1024 * 1024,
+            gcs_enabled: false
+        };
 
         // DOM Elements
         const uploadZone = document.getElementById('uploadZone');
@@ -611,6 +616,15 @@
         const progressPercent = document.getElementById('progressPercent');
         const resultSection = document.getElementById('resultSection');
         const errorMessage = document.getElementById('errorMessage');
+
+        // Fetch upload config on load
+        fetch('/api/upload-config')
+            .then(r => r.json())
+            .then(config => {
+                uploadConfig = config;
+                console.log('Upload config:', config);
+            })
+            .catch(() => console.log('Using default upload config'));
 
         // File upload handling
         uploadZone.addEventListener('click', () => fileInput.click());
@@ -653,8 +667,17 @@
                 return;
             }
 
-            if (file.size > 100 * 1024 * 1024) {
-                showError('File too large. Maximum size is 100MB.');
+            // Check file size against configured limits
+            if (file.size > uploadConfig.max_file_size) {
+                const maxMB = Math.round(uploadConfig.max_file_size / (1024 * 1024));
+                showError(`File too large. Maximum size is ${maxMB}MB.`);
+                return;
+            }
+
+            // Warn if file needs GCS but GCS isn't enabled
+            if (file.size > uploadConfig.max_direct_upload && !uploadConfig.gcs_enabled) {
+                const maxMB = Math.round(uploadConfig.max_direct_upload / (1024 * 1024));
+                showError(`File too large for direct upload (max ${maxMB}MB). Large file support not configured on server.`);
                 return;
             }
 
@@ -692,15 +715,48 @@
             progressBar.classList.remove('indeterminate');
         }
 
+        async function uploadToGCS(file) {
+            // Get signed URL for upload
+            const formData = new FormData();
+            formData.append('filename', file.name);
+            formData.append('content_type', file.type || 'application/octet-stream');
+
+            const urlResponse = await fetch('/api/get-upload-url', {
+                method: 'POST',
+                body: formData
+            });
+
+            if (!urlResponse.ok) {
+                const error = await urlResponse.json();
+                throw new Error(error.detail || 'Failed to get upload URL');
+            }
+
+            const { upload_url, blob_name } = await urlResponse.json();
+
+            // Upload file directly to GCS
+            updateProgress('Uploading', 'Uploading large file to cloud storage...', 2);
+
+            const uploadResponse = await fetch(upload_url, {
+                method: 'PUT',
+                body: file,
+                headers: {
+                    'Content-Type': file.type || 'application/octet-stream'
+                }
+            });
+
+            if (!uploadResponse.ok) {
+                throw new Error('Failed to upload file to cloud storage');
+            }
+
+            return blob_name;
+        }
+
         async function startTranscription() {
             if (!selectedFile) return;
 
             hideError();
             uploadSection.classList.add('hidden');
             progressSection.classList.add('active');
-
-            // Initial state
-            updateProgress('Uploading', 'Sending audio file to server...', 0);
 
             const debugMode = document.getElementById('debugMode').checked;
             const debugLog = document.getElementById('debugLog');
@@ -714,16 +770,29 @@
                 debugLog.classList.add('hidden');
             }
 
-            const formData = new FormData();
-            formData.append('file', selectedFile);
-            formData.append('output_format', outputFormat.value);
-            formData.append('debug', debugMode);
-            if (speakerCount.value) {
-                formData.append('speakers', speakerCount.value);
-            }
-
             try {
-                // Use fetch with SSE response handling
+                const formData = new FormData();
+                formData.append('output_format', outputFormat.value);
+                formData.append('debug', debugMode);
+                if (speakerCount.value) {
+                    formData.append('speakers', speakerCount.value);
+                }
+
+                // Determine upload method based on file size
+                const useGCS = selectedFile.size > uploadConfig.max_direct_upload && uploadConfig.gcs_enabled;
+
+                if (useGCS) {
+                    // Large file: upload to GCS first
+                    updateProgress('Uploading', 'Preparing large file upload...', 0);
+                    const blobName = await uploadToGCS(selectedFile);
+                    formData.append('gcs_blob', blobName);
+                } else {
+                    // Small file: direct upload
+                    updateProgress('Uploading', 'Sending audio file to server...', 0);
+                    formData.append('file', selectedFile);
+                }
+
+                // Start transcription
                 const response = await fetch('/api/transcribe', {
                     method: 'POST',
                     body: formData

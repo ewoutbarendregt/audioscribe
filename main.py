@@ -7,6 +7,7 @@ using the Gemini API. Designed for deployment on Google Cloud Run.
 
 Environment Variables:
     GEMINI_API_KEY - Your Gemini API key (use Secret Manager in Cloud Run)
+    GCS_BUCKET - Google Cloud Storage bucket for large file uploads (optional)
 """
 
 import asyncio
@@ -14,6 +15,7 @@ import json
 import os
 import tempfile
 import uuid
+from datetime import timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -24,7 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from transcriber import transcribe_audio_with_progress, TranscriptionResult
 
 # App version - increment with each deployment
-APP_VERSION = "1.1.3"
+APP_VERSION = "1.2.0"
 
 app = FastAPI(
     title="Audio Transcription",
@@ -34,12 +36,25 @@ app = FastAPI(
 
 # Supported audio formats
 SUPPORTED_FORMATS = {'.mp3', '.m4a', '.wav', '.flac', '.ogg', '.webm', '.mp4', '.mpeg', '.mpga', '.aac'}
-MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
+MAX_DIRECT_UPLOAD = 30 * 1024 * 1024  # 30MB for direct upload (under Cloud Run's 32MB limit)
+MAX_FILE_SIZE = 500 * 1024 * 1024  # 500MB max via GCS
+
+# GCS bucket for large file uploads
+GCS_BUCKET = os.environ.get("GCS_BUCKET", "")
 
 # Serve static files
 static_dir = Path(__file__).parent / "static"
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+
+def get_gcs_client():
+    """Get Google Cloud Storage client."""
+    try:
+        from google.cloud import storage
+        return storage.Client()
+    except Exception:
+        return None
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -57,7 +72,8 @@ async def health_check():
     return {
         "status": "healthy",
         "version": APP_VERSION,
-        "api_key_configured": bool(os.environ.get("GEMINI_API_KEY"))
+        "api_key_configured": bool(os.environ.get("GEMINI_API_KEY")),
+        "gcs_configured": bool(GCS_BUCKET)
     }
 
 
@@ -67,15 +83,86 @@ async def get_version():
     return {"version": APP_VERSION}
 
 
+@app.get("/api/upload-config")
+async def get_upload_config():
+    """Get upload configuration including size limits."""
+    return {
+        "max_direct_upload": MAX_DIRECT_UPLOAD,
+        "max_file_size": MAX_FILE_SIZE if GCS_BUCKET else MAX_DIRECT_UPLOAD,
+        "gcs_enabled": bool(GCS_BUCKET),
+        "supported_formats": list(SUPPORTED_FORMATS)
+    }
+
+
+@app.post("/api/get-upload-url")
+async def get_upload_url(
+    filename: str = Form(...),
+    content_type: str = Form(...)
+):
+    """
+    Get a signed URL for uploading large files directly to GCS.
+    This bypasses Cloud Run's 32MB request limit.
+    """
+    if not GCS_BUCKET:
+        raise HTTPException(
+            status_code=400,
+            detail="Large file uploads not configured. Please set GCS_BUCKET environment variable."
+        )
+
+    # Validate file extension
+    file_ext = Path(filename).suffix.lower()
+    if file_ext not in SUPPORTED_FORMATS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file format: {file_ext}"
+        )
+
+    client = get_gcs_client()
+    if not client:
+        raise HTTPException(
+            status_code=500,
+            detail="Could not initialize GCS client"
+        )
+
+    try:
+        bucket = client.bucket(GCS_BUCKET)
+        blob_name = f"uploads/{uuid.uuid4().hex}{file_ext}"
+        blob = bucket.blob(blob_name)
+
+        # Generate signed URL for upload (valid for 15 minutes)
+        url = blob.generate_signed_url(
+            version="v4",
+            expiration=timedelta(minutes=15),
+            method="PUT",
+            content_type=content_type,
+        )
+
+        return {
+            "upload_url": url,
+            "blob_name": blob_name,
+            "bucket": GCS_BUCKET
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate upload URL: {str(e)}"
+        )
+
+
 @app.post("/api/transcribe")
 async def transcribe(
-    file: UploadFile = File(...),
+    file: UploadFile = File(None),
+    gcs_blob: Optional[str] = Form(None),
     speakers: Optional[int] = Form(None),
     output_format: str = Form("text"),
     debug: bool = Form(False)
 ):
     """
-    Transcribe an uploaded audio file with streaming progress updates.
+    Transcribe an audio file with streaming progress updates.
+
+    Supports two modes:
+    - Direct upload: file parameter (for files < 30MB)
+    - GCS upload: gcs_blob parameter (for larger files)
 
     Returns Server-Sent Events (SSE) with progress updates, then final result.
     """
@@ -86,22 +173,33 @@ async def transcribe(
             detail="GEMINI_API_KEY not configured. Please set up the API key in Secret Manager."
         )
 
+    # Determine file source
+    use_gcs = bool(gcs_blob)
+    file_ext = None
+    content = None
+
+    if use_gcs:
+        if not GCS_BUCKET:
+            raise HTTPException(status_code=400, detail="GCS not configured")
+        file_ext = Path(gcs_blob).suffix.lower()
+    elif file:
+        file_ext = Path(file.filename).suffix.lower()
+        content = await file.read()
+
+        # Check file size for direct upload
+        if len(content) > MAX_DIRECT_UPLOAD:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File too large for direct upload. Maximum is {MAX_DIRECT_UPLOAD // (1024*1024)}MB. Use GCS upload for larger files."
+            )
+    else:
+        raise HTTPException(status_code=400, detail="No file provided")
+
     # Validate file extension
-    file_ext = Path(file.filename).suffix.lower()
     if file_ext not in SUPPORTED_FORMATS:
         raise HTTPException(
             status_code=400,
             detail=f"Unsupported file format: {file_ext}. Supported: {', '.join(SUPPORTED_FORMATS)}"
-        )
-
-    # Read file content
-    content = await file.read()
-
-    # Check file size
-    if len(content) > MAX_FILE_SIZE:
-        raise HTTPException(
-            status_code=400,
-            detail=f"File too large. Maximum size is {MAX_FILE_SIZE // (1024*1024)}MB"
         )
 
     async def generate_sse():
@@ -109,23 +207,28 @@ async def transcribe(
         temp_dir = tempfile.gettempdir()
         temp_filename = f"upload_{uuid.uuid4().hex}{file_ext}"
         temp_path = Path(temp_dir) / temp_filename
+        gcs_client = None
+        bucket = None
+        blob = None
 
         try:
-            # Save file
-            temp_path.write_bytes(content)
+            if use_gcs:
+                # Download from GCS
+                yield f"data: {json.dumps({'type': 'progress', 'stage': 'Downloading', 'detail': 'Fetching file from cloud storage...', 'percent': 5})}\n\n"
 
-            # Progress callback
-            async def on_progress(stage: str, detail: str = "", percent: int = 0):
-                event_data = json.dumps({
-                    "type": "progress",
-                    "stage": stage,
-                    "detail": detail,
-                    "percent": percent
-                })
-                yield f"data: {event_data}\n\n"
+                gcs_client = get_gcs_client()
+                if not gcs_client:
+                    raise Exception("Could not initialize GCS client")
 
-            # Send initial progress
-            yield f"data: {json.dumps({'type': 'progress', 'stage': 'Starting', 'detail': 'Preparing audio file...', 'percent': 5})}\n\n"
+                bucket = gcs_client.bucket(GCS_BUCKET)
+                blob = bucket.blob(gcs_blob)
+                blob.download_to_filename(str(temp_path))
+
+                yield f"data: {json.dumps({'type': 'progress', 'stage': 'Downloaded', 'detail': 'File ready for processing', 'percent': 10})}\n\n"
+            else:
+                # Save direct upload
+                temp_path.write_bytes(content)
+                yield f"data: {json.dumps({'type': 'progress', 'stage': 'Starting', 'detail': 'Preparing audio file...', 'percent': 5})}\n\n"
 
             # Transcribe with progress updates
             result: TranscriptionResult = None
@@ -192,6 +295,13 @@ async def transcribe(
             # Clean up temp file
             if temp_path.exists():
                 temp_path.unlink()
+
+            # Clean up GCS blob
+            if use_gcs and blob:
+                try:
+                    blob.delete()
+                except Exception:
+                    pass
 
     return StreamingResponse(
         generate_sse(),
