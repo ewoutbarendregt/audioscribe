@@ -26,7 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from transcriber import transcribe_audio_with_progress, TranscriptionResult
 
 # App version - increment with each deployment
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.2.1"
 
 app = FastAPI(
     title="Audio Transcription",
@@ -117,24 +117,40 @@ async def get_upload_url(
             detail=f"Unsupported file format: {file_ext}"
         )
 
-    client = get_gcs_client()
-    if not client:
-        raise HTTPException(
-            status_code=500,
-            detail="Could not initialize GCS client"
-        )
-
     try:
+        import google.auth
+        from google.auth.transport import requests
+        from google.cloud import storage
+
+        # Get credentials and create signing credentials for Cloud Run
+        credentials, project = google.auth.default()
+
+        # Refresh credentials to ensure they're valid
+        auth_request = requests.Request()
+        credentials.refresh(auth_request)
+
+        # Create storage client
+        client = storage.Client(credentials=credentials, project=project)
         bucket = client.bucket(GCS_BUCKET)
         blob_name = f"uploads/{uuid.uuid4().hex}{file_ext}"
         blob = bucket.blob(blob_name)
 
-        # Generate signed URL for upload (valid for 15 minutes)
+        # Generate signed URL using IAM signBlob (works with compute engine credentials)
+        from google.auth import compute_engine
+        signing_credentials = compute_engine.IDTokenCredentials(
+            auth_request,
+            target_audience="",
+            use_metadata_identity_endpoint=True
+        )
+
+        # Use v4 signing with service account email
         url = blob.generate_signed_url(
             version="v4",
             expiration=timedelta(minutes=15),
             method="PUT",
             content_type=content_type,
+            service_account_email=credentials.service_account_email,
+            access_token=credentials.token,
         )
 
         return {
