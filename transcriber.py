@@ -145,7 +145,8 @@ def transcribe_chunk_sync(client, file_path: Path, num_speakers: Optional[int] =
 
     # Upload the audio file - only specify MIME type for formats Gemini can't auto-detect
     if mime_type:
-        uploaded_file = client.files.upload(file=str(file_path), config={'mimeType': mime_type})
+        upload_config = types.UploadFileConfig(mime_type=mime_type)
+        uploaded_file = client.files.upload(file=str(file_path), config=upload_config)
     else:
         uploaded_file = client.files.upload(file=str(file_path))
     log(f"Upload complete: {uploaded_file.name}")

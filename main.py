@@ -24,7 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from transcriber import transcribe_audio_with_progress, TranscriptionResult
 
 # App version - increment with each deployment
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.1"
 
 app = FastAPI(
     title="Audio Transcription",
