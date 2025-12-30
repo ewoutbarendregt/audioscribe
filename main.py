@@ -27,7 +27,7 @@ from transcriber import transcribe_audio_with_progress, TranscriptionResult
 from job_store import get_job_store, Job, JobStatus
 
 # App version - increment with each deployment
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.1.1"
 
 app = FastAPI(
     title="Audio Transcription",
