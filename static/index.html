@@ -544,6 +544,9 @@
                 <div class="debug-log-header">Currently doing:</div>
                 <div class="debug-log-content" id="debugLogContent"></div>
             </div>
+            <button class="btn btn-secondary" id="cancelBtn" style="width: 100%; margin-top: 1rem;">
+                Cancel
+            </button>
         </div>
 
         <!-- Result Section -->
@@ -1055,6 +1058,16 @@
         // New transcript
         document.getElementById('newTranscript').addEventListener('click', () => {
             transcriptData = null;
+            clearFile();
+            resetToUpload();
+        });
+
+        // Cancel button
+        document.getElementById('cancelBtn').addEventListener('click', () => {
+            if (currentJobId) {
+                // Optionally delete the job on the server
+                fetch(`/api/job/${currentJobId}`, { method: 'DELETE' }).catch(() => {});
+            }
             clearFile();
             resetToUpload();
         });
