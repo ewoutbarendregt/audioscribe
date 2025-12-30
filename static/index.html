@@ -758,6 +758,17 @@
             uploadSection.classList.add('hidden');
             progressSection.classList.add('active');
 
+            // Try to keep screen awake during transcription (mobile)
+            let wakeLock = null;
+            try {
+                if ('wakeLock' in navigator) {
+                    wakeLock = await navigator.wakeLock.request('screen');
+                    console.log('Wake lock acquired');
+                }
+            } catch (err) {
+                console.log('Wake lock not available:', err);
+            }
+
             const debugMode = document.getElementById('debugMode').checked;
             const debugLog = document.getElementById('debugLog');
             const debugLogContent = document.getElementById('debugLogContent');
@@ -850,6 +861,12 @@
             } catch (error) {
                 showError(error.message);
                 resetToUpload();
+            } finally {
+                // Release wake lock
+                if (wakeLock) {
+                    wakeLock.release();
+                    console.log('Wake lock released');
+                }
             }
         }
 
