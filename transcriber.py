@@ -463,18 +463,17 @@ async def transcribe_audio_with_progress(
             await report_debug(f"Creating chunk {i+1}/{num_chunks}...")
 
             start_time = i * chunk_seconds
-            chunk_path = Path(temp_dir) / f"transcribe_chunk_{os.getpid()}_{i}.mp3"
+            # Keep same extension as input for stream copy compatibility
+            input_ext = file_path.suffix.lower()
+            chunk_path = Path(temp_dir) / f"transcribe_chunk_{os.getpid()}_{i}{input_ext}"
 
-            # Run ffmpeg in executor to not block
+            # Run ffmpeg in executor to not block - use stream copy (no re-encoding = fast!)
             cmd = [
                 'ffmpeg', '-y',
                 '-ss', str(start_time),
                 '-i', str(file_path),
                 '-t', str(chunk_seconds),
-                '-acodec', 'libmp3lame',
-                '-ab', '128k',
-                '-ar', '44100',
-                '-ac', '2',
+                '-c', 'copy',  # Stream copy - no re-encoding, very fast
                 str(chunk_path)
             ]
 
