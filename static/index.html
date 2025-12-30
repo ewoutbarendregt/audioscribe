@@ -783,22 +783,36 @@
 
             const { upload_url, blob_name } = await urlResponse.json();
 
-            // Upload file directly to GCS
-            updateProgress('Uploading', 'Uploading large file to cloud storage...', 2);
+            // Upload file directly to GCS with progress tracking
+            updateProgress('Uploading', 'Starting upload...', 1);
 
-            const uploadResponse = await fetch(upload_url, {
-                method: 'PUT',
-                body: file,
-                headers: {
-                    'Content-Type': file.type || 'application/octet-stream'
-                }
+            return new Promise((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+
+                xhr.upload.addEventListener('progress', (e) => {
+                    if (e.lengthComputable) {
+                        const percentComplete = Math.round((e.loaded / e.total) * 100);
+                        updateProgress('Uploading', `Uploading: ${percentComplete}% (${formatFileSize(e.loaded)} / ${formatFileSize(e.total)})`, Math.max(1, Math.min(percentComplete, 15)));
+                    }
+                });
+
+                xhr.addEventListener('load', () => {
+                    if (xhr.status >= 200 && xhr.status < 300) {
+                        updateProgress('Uploading', 'Upload complete!', 15);
+                        resolve(blob_name);
+                    } else {
+                        reject(new Error('Failed to upload file to cloud storage'));
+                    }
+                });
+
+                xhr.addEventListener('error', () => {
+                    reject(new Error('Network error during upload'));
+                });
+
+                xhr.open('PUT', upload_url);
+                xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+                xhr.send(file);
             });
-
-            if (!uploadResponse.ok) {
-                throw new Error('Failed to upload file to cloud storage');
-            }
-
-            return blob_name;
         }
 
         async function startTranscription() {

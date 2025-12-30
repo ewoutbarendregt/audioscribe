@@ -27,7 +27,7 @@ from transcriber import transcribe_audio_with_progress, TranscriptionResult
 from job_store import get_job_store, Job, JobStatus
 
 # App version - increment with each deployment
-APP_VERSION = "2.0.7"
+APP_VERSION = "2.0.8"
 
 app = FastAPI(
     title="Audio Transcription",
@@ -379,7 +379,7 @@ async def get_job_status(job_id: str):
             "detail": job.progress_detail,
             "percent": job.progress_percent
         },
-        "debug_messages": job.debug_messages[-10:],  # Last 10 messages
+        "debug_messages": job.debug_messages,  # All messages (up to 50 stored)
         "created_at": job.created_at.isoformat() if job.created_at else None,
         "updated_at": job.updated_at.isoformat() if job.updated_at else None,
     }
