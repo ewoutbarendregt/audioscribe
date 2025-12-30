@@ -484,8 +484,10 @@ async def transcribe_audio_with_progress(
 
             start_time = i * chunk_seconds
             # Keep same extension as input for stream copy compatibility
+            # Use uuid instead of PID to avoid collisions across concurrent jobs
             input_ext = file_path.suffix.lower()
-            chunk_path = Path(temp_dir) / f"transcribe_chunk_{os.getpid()}_{i}{input_ext}"
+            unique_id = file_path.stem  # Use the job file's unique name
+            chunk_path = Path(temp_dir) / f"chunk_{unique_id}_{i}{input_ext}"
 
             # Run ffmpeg in executor to not block - use stream copy (no re-encoding = fast!)
             cmd = [
