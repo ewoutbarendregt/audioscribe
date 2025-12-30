@@ -256,13 +256,13 @@ OTHER REQUIREMENTS:
 
 Output the transcription with clear speaker labels and timestamps."""
 
-    log("Sending prompt to Gemini API (model: gemini-3-pro)...")
+    log("Sending prompt to Gemini API (model: gemini-3-pro-preview)...")
     log(f"Prompt length: {len(prompt)} characters")
     log("Waiting for API response (this may take 30-60 seconds)...")
 
     # Use structured output for consistent JSON responses
     response = client.models.generate_content(
-        model="gemini-3-pro",
+        model="gemini-3-pro-preview",
         contents=[prompt, uploaded_file],
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
