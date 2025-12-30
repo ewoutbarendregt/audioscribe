@@ -19,14 +19,15 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, BackgroundTasks
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from transcriber import transcribe_audio_with_progress, TranscriptionResult
+from job_store import get_job_store, Job, JobStatus
 
 # App version - increment with each deployment
-APP_VERSION = "1.2.2"
+APP_VERSION = "2.0.0"
 
 app = FastAPI(
     title="Audio Transcription",
@@ -46,6 +47,15 @@ GCS_BUCKET = os.environ.get("GCS_BUCKET", "")
 static_dir = Path(__file__).parent / "static"
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+# Global job store instance
+_job_store = None
+
+def get_store():
+    global _job_store
+    if _job_store is None:
+        _job_store = get_job_store()
+    return _job_store
 
 
 def get_gcs_client():
@@ -135,14 +145,6 @@ async def get_upload_url(
         blob_name = f"uploads/{uuid.uuid4().hex}{file_ext}"
         blob = bucket.blob(blob_name)
 
-        # Generate signed URL using IAM signBlob (works with compute engine credentials)
-        from google.auth import compute_engine
-        signing_credentials = compute_engine.IDTokenCredentials(
-            auth_request,
-            target_audience="",
-            use_metadata_identity_endpoint=True
-        )
-
         # Use v4 signing with service account email
         url = blob.generate_signed_url(
             version="v4",
@@ -165,8 +167,85 @@ async def get_upload_url(
         )
 
 
+async def process_transcription_job(job_id: str, temp_path: Path, speakers: Optional[int], gcs_blob: Optional[str]):
+    """Background task to process transcription job."""
+    store = get_store()
+    job = store.get_job(job_id)
+    if not job:
+        return
+
+    job.status = JobStatus.PROCESSING
+    store.update_job(job)
+
+    try:
+        # Progress callback - updates job in store
+        async def progress_callback(stage: str, detail: str = "", percent: int = 0):
+            job.progress_stage = stage
+            job.progress_detail = detail
+            job.progress_percent = percent
+            store.update_job(job)
+
+        # Debug callback - appends to debug messages
+        async def debug_callback(message: str):
+            job.debug_messages.append(message)
+            # Limit debug messages to last 50
+            if len(job.debug_messages) > 50:
+                job.debug_messages = job.debug_messages[-50:]
+            store.update_job(job)
+
+        # Run transcription
+        result = await transcribe_audio_with_progress(
+            file_path=temp_path,
+            num_speakers=speakers,
+            progress_callback=progress_callback,
+            debug_callback=debug_callback
+        )
+
+        # Store result
+        job.status = JobStatus.COMPLETED
+        job.progress_percent = 100
+        job.progress_stage = "Complete"
+        job.progress_detail = f"Transcribed {len(result.segments)} segments"
+        job.result = {
+            "language": result.language,
+            "summary": result.summary,
+            "speaker_count": result.speaker_count,
+            "segments": [
+                {
+                    "speaker": seg.speaker,
+                    "timestamp": seg.timestamp,
+                    "text": seg.text
+                }
+                for seg in result.segments
+            ]
+        }
+        store.update_job(job)
+
+    except Exception as e:
+        job.status = JobStatus.FAILED
+        job.error = str(e)
+        store.update_job(job)
+
+    finally:
+        # Clean up temp file
+        if temp_path.exists():
+            temp_path.unlink()
+
+        # Clean up GCS blob
+        if gcs_blob and GCS_BUCKET:
+            try:
+                client = get_gcs_client()
+                if client:
+                    bucket = client.bucket(GCS_BUCKET)
+                    blob = bucket.blob(gcs_blob)
+                    blob.delete()
+            except Exception:
+                pass
+
+
 @app.post("/api/transcribe")
 async def transcribe(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(None),
     gcs_blob: Optional[str] = Form(None),
     speakers: Optional[int] = Form(None),
@@ -174,13 +253,13 @@ async def transcribe(
     debug: bool = Form(False)
 ):
     """
-    Transcribe an audio file with streaming progress updates.
+    Start a transcription job.
+
+    Returns immediately with a job_id that can be polled for status.
 
     Supports two modes:
     - Direct upload: file parameter (for files < 30MB)
     - GCS upload: gcs_blob parameter (for larger files)
-
-    Returns Server-Sent Events (SSE) with progress updates, then final result.
     """
     # Check API key
     if not os.environ.get("GEMINI_API_KEY"):
@@ -193,17 +272,22 @@ async def transcribe(
     use_gcs = bool(gcs_blob)
     file_ext = None
     content = None
+    filename = ""
+    file_size = 0
 
     if use_gcs:
         if not GCS_BUCKET:
             raise HTTPException(status_code=400, detail="GCS not configured")
         file_ext = Path(gcs_blob).suffix.lower()
+        filename = gcs_blob.split("/")[-1]
     elif file:
         file_ext = Path(file.filename).suffix.lower()
+        filename = file.filename
         content = await file.read()
+        file_size = len(content)
 
         # Check file size for direct upload
-        if len(content) > MAX_DIRECT_UPLOAD:
+        if file_size > MAX_DIRECT_UPLOAD:
             raise HTTPException(
                 status_code=400,
                 detail=f"File too large for direct upload. Maximum is {MAX_DIRECT_UPLOAD // (1024*1024)}MB. Use GCS upload for larger files."
@@ -218,116 +302,93 @@ async def transcribe(
             detail=f"Unsupported file format: {file_ext}. Supported: {', '.join(SUPPORTED_FORMATS)}"
         )
 
-    async def generate_sse():
-        """Generate Server-Sent Events for progress and result."""
-        temp_dir = tempfile.gettempdir()
-        temp_filename = f"upload_{uuid.uuid4().hex}{file_ext}"
-        temp_path = Path(temp_dir) / temp_filename
-        gcs_client = None
-        bucket = None
-        blob = None
-
-        try:
-            if use_gcs:
-                # Download from GCS
-                yield f"data: {json.dumps({'type': 'progress', 'stage': 'Downloading', 'detail': 'Fetching file from cloud storage...', 'percent': 5})}\n\n"
-
-                gcs_client = get_gcs_client()
-                if not gcs_client:
-                    raise Exception("Could not initialize GCS client")
-
-                bucket = gcs_client.bucket(GCS_BUCKET)
-                blob = bucket.blob(gcs_blob)
-                blob.download_to_filename(str(temp_path))
-
-                yield f"data: {json.dumps({'type': 'progress', 'stage': 'Downloaded', 'detail': 'File ready for processing', 'percent': 10})}\n\n"
-            else:
-                # Save direct upload
-                temp_path.write_bytes(content)
-                yield f"data: {json.dumps({'type': 'progress', 'stage': 'Starting', 'detail': 'Preparing audio file...', 'percent': 5})}\n\n"
-
-            # Transcribe with progress updates
-            result: TranscriptionResult = None
-            progress_queue = asyncio.Queue()
-
-            async def progress_callback(stage: str, detail: str = "", percent: int = 0):
-                await progress_queue.put({"type": "progress", "stage": stage, "detail": detail, "percent": percent})
-
-            async def debug_callback(message: str):
-                if debug:
-                    await progress_queue.put({"type": "debug", "message": message})
-
-            # Start transcription in background
-            transcribe_task = asyncio.create_task(
-                transcribe_audio_with_progress(
-                    file_path=temp_path,
-                    num_speakers=speakers,
-                    progress_callback=progress_callback,
-                    debug_callback=debug_callback
-                )
-            )
-
-            # Stream progress updates while transcription runs
-            while not transcribe_task.done():
-                try:
-                    event = await asyncio.wait_for(progress_queue.get(), timeout=0.5)
-                    event_data = json.dumps(event)
-                    yield f"data: {event_data}\n\n"
-                except asyncio.TimeoutError:
-                    pass
-
-            # Get result
-            result = await transcribe_task
-
-            # Drain any remaining progress/debug updates
-            while not progress_queue.empty():
-                event = await progress_queue.get()
-                event_data = json.dumps(event)
-                yield f"data: {event_data}\n\n"
-
-            # Send final result
-            result_data = {
-                "type": "result",
-                "success": True,
-                "language": result.language,
-                "summary": result.summary,
-                "speaker_count": result.speaker_count,
-                "segments": [
-                    {
-                        "speaker": seg.speaker,
-                        "timestamp": seg.timestamp,
-                        "text": seg.text
-                    }
-                    for seg in result.segments
-                ]
-            }
-            yield f"data: {json.dumps(result_data)}\n\n"
-
-        except Exception as e:
-            error_data = json.dumps({"type": "error", "message": str(e)})
-            yield f"data: {error_data}\n\n"
-
-        finally:
-            # Clean up temp file
-            if temp_path.exists():
-                temp_path.unlink()
-
-            # Clean up GCS blob
-            if use_gcs and blob:
-                try:
-                    blob.delete()
-                except Exception:
-                    pass
-
-    return StreamingResponse(
-        generate_sse(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"
-        }
+    # Create job
+    store = get_store()
+    job = store.create_job(
+        filename=filename,
+        file_size=file_size,
+        gcs_blob=gcs_blob or "",
+        speakers=speakers
     )
+
+    # Save file to temp location
+    temp_dir = tempfile.gettempdir()
+    temp_filename = f"job_{job.id}{file_ext}"
+    temp_path = Path(temp_dir) / temp_filename
+
+    if use_gcs:
+        # Download from GCS
+        try:
+            client = get_gcs_client()
+            if not client:
+                raise Exception("Could not initialize GCS client")
+            bucket = client.bucket(GCS_BUCKET)
+            blob = bucket.blob(gcs_blob)
+            blob.download_to_filename(str(temp_path))
+        except Exception as e:
+            store.delete_job(job.id)
+            raise HTTPException(status_code=500, detail=f"Failed to download file: {str(e)}")
+    else:
+        # Save direct upload
+        temp_path.write_bytes(content)
+
+    # Start background processing
+    background_tasks.add_task(process_transcription_job, job.id, temp_path, speakers, gcs_blob)
+
+    return {
+        "job_id": job.id,
+        "status": job.status.value,
+        "message": "Transcription job started"
+    }
+
+
+@app.get("/api/job/{job_id}")
+async def get_job_status(job_id: str):
+    """
+    Get the status of a transcription job.
+
+    Poll this endpoint to get progress updates and final result.
+    """
+    store = get_store()
+    job = store.get_job(job_id)
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    response = {
+        "job_id": job.id,
+        "status": job.status.value,
+        "filename": job.filename,
+        "progress": {
+            "stage": job.progress_stage,
+            "detail": job.progress_detail,
+            "percent": job.progress_percent
+        },
+        "debug_messages": job.debug_messages[-10:],  # Last 10 messages
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+    }
+
+    if job.status == JobStatus.COMPLETED and job.result:
+        response["result"] = job.result
+
+    if job.status == JobStatus.FAILED and job.error:
+        response["error"] = job.error
+
+    return response
+
+
+@app.delete("/api/job/{job_id}")
+async def delete_job(job_id: str):
+    """Delete a job and its data."""
+    store = get_store()
+    job = store.get_job(job_id)
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    store.delete_job(job_id)
+    return {"message": "Job deleted"}
 
 
 @app.get("/manifest.json")
