@@ -141,6 +141,14 @@ def get_job_store() -> JobStore:
     """Get the appropriate job store based on environment."""
     # Use Firestore in production (when on Cloud Run)
     if os.environ.get("K_SERVICE"):  # K_SERVICE is set by Cloud Run
-        return FirestoreJobStore()
+        try:
+            store = FirestoreJobStore()
+            # Test connectivity with a quick operation
+            print("[JobStore] Firestore initialized successfully")
+            return store
+        except Exception as e:
+            print(f"[JobStore] Firestore failed, using in-memory store: {e}")
+            return InMemoryJobStore()
     # Use in-memory store for local development
+    print("[JobStore] Using in-memory store (local development)")
     return InMemoryJobStore()

@@ -27,7 +27,7 @@ from transcriber import transcribe_audio_with_progress, TranscriptionResult
 from job_store import get_job_store, Job, JobStatus
 
 # App version - increment with each deployment
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.0.1"
 
 app = FastAPI(
     title="Audio Transcription",
@@ -167,80 +167,95 @@ async def get_upload_url(
         )
 
 
-async def process_transcription_job(job_id: str, temp_path: Path, speakers: Optional[int], gcs_blob: Optional[str]):
-    """Background task to process transcription job."""
-    store = get_store()
-    job = store.get_job(job_id)
-    if not job:
-        return
+def process_transcription_job_sync(job_id: str, temp_path: Path, speakers: Optional[int], gcs_blob: Optional[str]):
+    """Background task to process transcription job (sync wrapper for async code)."""
+    import asyncio
 
-    job.status = JobStatus.PROCESSING
-    store.update_job(job)
+    async def run_job():
+        store = get_store()
+        job = store.get_job(job_id)
+        if not job:
+            print(f"[Job {job_id}] Job not found, aborting")
+            return
 
-    try:
-        # Progress callback - updates job in store
-        async def progress_callback(stage: str, detail: str = "", percent: int = 0):
-            job.progress_stage = stage
-            job.progress_detail = detail
-            job.progress_percent = percent
-            store.update_job(job)
-
-        # Debug callback - appends to debug messages
-        async def debug_callback(message: str):
-            job.debug_messages.append(message)
-            # Limit debug messages to last 50
-            if len(job.debug_messages) > 50:
-                job.debug_messages = job.debug_messages[-50:]
-            store.update_job(job)
-
-        # Run transcription
-        result = await transcribe_audio_with_progress(
-            file_path=temp_path,
-            num_speakers=speakers,
-            progress_callback=progress_callback,
-            debug_callback=debug_callback
-        )
-
-        # Store result
-        job.status = JobStatus.COMPLETED
-        job.progress_percent = 100
-        job.progress_stage = "Complete"
-        job.progress_detail = f"Transcribed {len(result.segments)} segments"
-        job.result = {
-            "language": result.language,
-            "summary": result.summary,
-            "speaker_count": result.speaker_count,
-            "segments": [
-                {
-                    "speaker": seg.speaker,
-                    "timestamp": seg.timestamp,
-                    "text": seg.text
-                }
-                for seg in result.segments
-            ]
-        }
+        print(f"[Job {job_id}] Starting processing...")
+        job.status = JobStatus.PROCESSING
         store.update_job(job)
 
-    except Exception as e:
-        job.status = JobStatus.FAILED
-        job.error = str(e)
-        store.update_job(job)
+        try:
+            # Progress callback - updates job in store
+            async def progress_callback(stage: str, detail: str = "", percent: int = 0):
+                job.progress_stage = stage
+                job.progress_detail = detail
+                job.progress_percent = percent
+                store.update_job(job)
 
-    finally:
-        # Clean up temp file
-        if temp_path.exists():
-            temp_path.unlink()
+            # Debug callback - appends to debug messages
+            async def debug_callback(message: str):
+                job.debug_messages.append(message)
+                # Limit debug messages to last 50
+                if len(job.debug_messages) > 50:
+                    job.debug_messages = job.debug_messages[-50:]
+                store.update_job(job)
 
-        # Clean up GCS blob
-        if gcs_blob and GCS_BUCKET:
-            try:
-                client = get_gcs_client()
-                if client:
-                    bucket = client.bucket(GCS_BUCKET)
-                    blob = bucket.blob(gcs_blob)
-                    blob.delete()
-            except Exception:
-                pass
+            # Run transcription
+            result = await transcribe_audio_with_progress(
+                file_path=temp_path,
+                num_speakers=speakers,
+                progress_callback=progress_callback,
+                debug_callback=debug_callback
+            )
+
+            # Store result
+            job.status = JobStatus.COMPLETED
+            job.progress_percent = 100
+            job.progress_stage = "Complete"
+            job.progress_detail = f"Transcribed {len(result.segments)} segments"
+            job.result = {
+                "language": result.language,
+                "summary": result.summary,
+                "speaker_count": result.speaker_count,
+                "segments": [
+                    {
+                        "speaker": seg.speaker,
+                        "timestamp": seg.timestamp,
+                        "text": seg.text
+                    }
+                    for seg in result.segments
+                ]
+            }
+            store.update_job(job)
+            print(f"[Job {job_id}] Completed successfully with {len(result.segments)} segments")
+
+        except Exception as e:
+            print(f"[Job {job_id}] Failed with error: {e}")
+            job.status = JobStatus.FAILED
+            job.error = str(e)
+            store.update_job(job)
+
+        finally:
+            # Clean up temp file
+            if temp_path.exists():
+                try:
+                    temp_path.unlink()
+                    print(f"[Job {job_id}] Cleaned up temp file")
+                except Exception:
+                    pass
+
+            # Clean up GCS blob
+            if gcs_blob and GCS_BUCKET:
+                try:
+                    client = get_gcs_client()
+                    if client:
+                        bucket = client.bucket(GCS_BUCKET)
+                        blob = bucket.blob(gcs_blob)
+                        blob.delete()
+                        print(f"[Job {job_id}] Cleaned up GCS blob")
+                except Exception:
+                    pass
+
+    # Run the async job in a new event loop
+    asyncio.run(run_job())
 
 
 @app.post("/api/transcribe")
@@ -333,7 +348,7 @@ async def transcribe(
         temp_path.write_bytes(content)
 
     # Start background processing
-    background_tasks.add_task(process_transcription_job, job.id, temp_path, speakers, gcs_blob)
+    background_tasks.add_task(process_transcription_job_sync, job.id, temp_path, speakers, gcs_blob)
 
     return {
         "job_id": job.id,
