@@ -449,12 +449,47 @@ async def transcribe_audio_with_progress(
     await report_debug(f"Chunking needed: {needs_chunking} (threshold: {MAX_CHUNK_MINUTES} min)")
 
     if needs_chunking:
-        # Split and process chunks
+        # Split and process chunks - do this async to show progress
         num_chunks = int(duration_minutes / MAX_CHUNK_MINUTES) + 1
         await report_debug(f"Splitting audio into {num_chunks} chunks of {MAX_CHUNK_MINUTES} minutes each")
-        await report_progress("Splitting", f"Splitting into {num_chunks} chunks...", 20)
-        chunks = split_audio_into_chunks(file_path, MAX_CHUNK_MINUTES, progress_callback=sync_debug_log)
-        await drain_debug_queue()  # Drain any messages from splitting
+
+        # Split chunks one at a time with progress updates
+        chunk_seconds = MAX_CHUNK_MINUTES * 60
+        chunks = []
+        temp_dir = tempfile.gettempdir()
+
+        for i in range(num_chunks):
+            await report_progress("Splitting", f"Creating chunk {i+1}/{num_chunks}...", 20 + int((i / num_chunks) * 5))
+            await report_debug(f"Creating chunk {i+1}/{num_chunks}...")
+
+            start_time = i * chunk_seconds
+            chunk_path = Path(temp_dir) / f"transcribe_chunk_{os.getpid()}_{i}.mp3"
+
+            # Run ffmpeg in executor to not block
+            cmd = [
+                'ffmpeg', '-y',
+                '-ss', str(start_time),
+                '-i', str(file_path),
+                '-t', str(chunk_seconds),
+                '-acodec', 'libmp3lame',
+                '-ab', '128k',
+                '-ar', '44100',
+                '-ac', '2',
+                str(chunk_path)
+            ]
+
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                lambda cmd=cmd: subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            )
+
+            if result.returncode != 0:
+                raise RuntimeError(f"ffmpeg failed on chunk {i+1}: {result.stderr}")
+
+            chunks.append(chunk_path)
+            await report_debug(f"Chunk {i+1}/{num_chunks} created")
+
         await report_debug(f"Created {len(chunks)} chunk files")
 
         all_segments = []
