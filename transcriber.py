@@ -74,7 +74,8 @@ def get_audio_duration_pydub(file_path: Path) -> Optional[float]:
         return None
 
 
-def split_audio_into_chunks_ffmpeg(file_path: Path, chunk_minutes: int = MAX_CHUNK_MINUTES) -> list[Path]:
+def split_audio_into_chunks_ffmpeg(file_path: Path, chunk_minutes: int = MAX_CHUNK_MINUTES,
+                                    progress_callback: callable = None) -> list[Path]:
     """Split audio file into chunks using ffmpeg directly (memory-efficient)."""
     # Get duration first
     duration = get_audio_duration_ffprobe(file_path)
@@ -90,6 +91,9 @@ def split_audio_into_chunks_ffmpeg(file_path: Path, chunk_minutes: int = MAX_CHU
     for i in range(num_chunks):
         start_time = i * chunk_seconds
         chunk_path = Path(temp_dir) / f"transcribe_chunk_{os.getpid()}_{i}.mp3"
+
+        if progress_callback:
+            progress_callback(f"Creating chunk {i+1}/{num_chunks}...")
 
         # Use ffmpeg to extract chunk without loading entire file into memory
         cmd = [
@@ -109,17 +113,20 @@ def split_audio_into_chunks_ffmpeg(file_path: Path, chunk_minutes: int = MAX_CHU
             if result.returncode != 0:
                 raise RuntimeError(f"ffmpeg failed: {result.stderr}")
             chunks.append(chunk_path)
+            if progress_callback:
+                progress_callback(f"Chunk {i+1}/{num_chunks} created")
         except subprocess.TimeoutExpired:
             raise RuntimeError("ffmpeg timed out while splitting audio")
 
     return chunks
 
 
-def split_audio_into_chunks(file_path: Path, chunk_minutes: int = MAX_CHUNK_MINUTES) -> list[Path]:
+def split_audio_into_chunks(file_path: Path, chunk_minutes: int = MAX_CHUNK_MINUTES,
+                            progress_callback: callable = None) -> list[Path]:
     """Split audio file into chunks of specified duration."""
     # Try ffmpeg first (faster, more memory-efficient)
     try:
-        return split_audio_into_chunks_ffmpeg(file_path, chunk_minutes)
+        return split_audio_into_chunks_ffmpeg(file_path, chunk_minutes, progress_callback)
     except Exception as e:
         print(f"[DEBUG] ffmpeg split failed: {e}, falling back to pydub")
 
@@ -436,9 +443,9 @@ async def transcribe_audio_with_progress(
     else:
         await report_debug("Could not determine audio duration")
 
-    # Check if we need to split the audio
+    # Check if we need to split the audio (ffmpeg can always split, pydub is fallback)
     duration_minutes = (duration or 0) / 60
-    needs_chunking = duration_minutes > MAX_CHUNK_MINUTES and PYDUB_AVAILABLE
+    needs_chunking = duration_minutes > MAX_CHUNK_MINUTES
     await report_debug(f"Chunking needed: {needs_chunking} (threshold: {MAX_CHUNK_MINUTES} min)")
 
     if needs_chunking:
@@ -446,7 +453,8 @@ async def transcribe_audio_with_progress(
         num_chunks = int(duration_minutes / MAX_CHUNK_MINUTES) + 1
         await report_debug(f"Splitting audio into {num_chunks} chunks of {MAX_CHUNK_MINUTES} minutes each")
         await report_progress("Splitting", f"Splitting into {num_chunks} chunks...", 20)
-        chunks = split_audio_into_chunks(file_path, MAX_CHUNK_MINUTES)
+        chunks = split_audio_into_chunks(file_path, MAX_CHUNK_MINUTES, progress_callback=sync_debug_log)
+        await drain_debug_queue()  # Drain any messages from splitting
         await report_debug(f"Created {len(chunks)} chunk files")
 
         all_segments = []
