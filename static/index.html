@@ -597,6 +597,7 @@
         let transcriptData = null;
         let currentJobId = null;
         let pollInterval = null;
+        let originalFileName = null;  // Store original audio filename for downloads
         let uploadConfig = {
             max_direct_upload: 30 * 1024 * 1024,
             max_file_size: 30 * 1024 * 1024,
@@ -647,6 +648,10 @@
                 } else if (job.status === 'pending' || job.status === 'processing') {
                     // Resume polling for in-progress job
                     currentJobId = savedJobId;
+                    // Restore original filename from job for downloads
+                    if (job.filename) {
+                        originalFileName = job.filename.replace(/\.[^/.]+$/, '');
+                    }
                     uploadSection.classList.add('hidden');
                     progressSection.classList.add('active');
 
@@ -732,6 +737,8 @@
             }
 
             selectedFile = file;
+            // Store filename without extension for downloads
+            originalFileName = file.name.replace(/\.[^/.]+$/, '');
             fileName.textContent = file.name;
             fileSize.textContent = formatFileSize(file.size);
             fileInfo.classList.remove('hidden');
@@ -1056,12 +1063,14 @@
                 content += `${seg.speaker || 'Speaker'} [${seg.timestamp}]: ${seg.text}\n`;
             });
 
-            downloadFile(content, 'transcript.txt', 'text/plain');
+            const baseName = originalFileName || 'transcript';
+            downloadFile(content, `${baseName}_transcript.txt`, 'text/plain');
         });
 
         document.getElementById('downloadJson').addEventListener('click', () => {
             if (!transcriptData) return;
-            downloadFile(JSON.stringify(transcriptData, null, 2), 'transcript.json', 'application/json');
+            const baseName = originalFileName || 'transcript';
+            downloadFile(JSON.stringify(transcriptData, null, 2), `${baseName}_transcript.json`, 'application/json');
         });
 
         function downloadFile(content, filename, type) {
