@@ -27,7 +27,7 @@ from transcriber import transcribe_audio_with_progress, TranscriptionResult
 from job_store import get_job_store, Job, JobStatus
 
 # App version - increment with each deployment
-APP_VERSION = "2.1.2"
+APP_VERSION = "2.1.3"
 
 app = FastAPI(
     title="Audio Transcription",
@@ -193,9 +193,7 @@ def process_transcription_job_sync(job_id: str, temp_path: Path, speakers: Optio
             # Debug callback - appends to debug messages
             async def debug_callback(message: str):
                 job.debug_messages.append(message)
-                # Limit debug messages to last 50
-                if len(job.debug_messages) > 50:
-                    job.debug_messages = job.debug_messages[-50:]
+                # Don't trim during processing - trim only when returning to client
                 store.update_job(job)
 
             # Run transcription

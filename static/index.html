@@ -933,15 +933,22 @@
                     );
 
                     // Update debug messages
-                    if (job.debug_messages && job.debug_messages.length > lastDebugCount) {
-                        const newMessages = job.debug_messages.slice(lastDebugCount);
-                        newMessages.forEach(msg => {
-                            const msgDiv = document.createElement('div');
-                            msgDiv.textContent = msg;
-                            debugLogContent.appendChild(msgDiv);
-                        });
-                        debugLogContent.scrollTop = debugLogContent.scrollHeight;
-                        lastDebugCount = job.debug_messages.length;
+                    if (job.debug_messages && job.debug_messages.length > 0) {
+                        // Reset if array was trimmed (length less than our count)
+                        if (job.debug_messages.length < lastDebugCount) {
+                            debugLogContent.innerHTML = '';
+                            lastDebugCount = 0;
+                        }
+                        if (job.debug_messages.length > lastDebugCount) {
+                            const newMessages = job.debug_messages.slice(lastDebugCount);
+                            newMessages.forEach(msg => {
+                                const msgDiv = document.createElement('div');
+                                msgDiv.textContent = msg;
+                                debugLogContent.appendChild(msgDiv);
+                            });
+                            debugLogContent.scrollTop = debugLogContent.scrollHeight;
+                            lastDebugCount = job.debug_messages.length;
+                        }
                     }
 
                     // Check if job is complete
