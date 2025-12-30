@@ -74,8 +74,56 @@ def get_audio_duration_pydub(file_path: Path) -> Optional[float]:
         return None
 
 
+def split_audio_into_chunks_ffmpeg(file_path: Path, chunk_minutes: int = MAX_CHUNK_MINUTES) -> list[Path]:
+    """Split audio file into chunks using ffmpeg directly (memory-efficient)."""
+    # Get duration first
+    duration = get_audio_duration_ffprobe(file_path)
+    if duration is None:
+        raise ValueError("Could not determine audio duration")
+
+    chunk_seconds = chunk_minutes * 60
+    num_chunks = int(duration / chunk_seconds) + (1 if duration % chunk_seconds > 0 else 0)
+
+    chunks = []
+    temp_dir = tempfile.gettempdir()
+
+    for i in range(num_chunks):
+        start_time = i * chunk_seconds
+        chunk_path = Path(temp_dir) / f"transcribe_chunk_{os.getpid()}_{i}.mp3"
+
+        # Use ffmpeg to extract chunk without loading entire file into memory
+        cmd = [
+            'ffmpeg', '-y',  # Overwrite output
+            '-ss', str(start_time),  # Start time
+            '-i', str(file_path),  # Input file
+            '-t', str(chunk_seconds),  # Duration
+            '-acodec', 'libmp3lame',  # MP3 codec
+            '-ab', '128k',  # Bitrate
+            '-ar', '44100',  # Sample rate
+            '-ac', '2',  # Stereo
+            str(chunk_path)
+        ]
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            if result.returncode != 0:
+                raise RuntimeError(f"ffmpeg failed: {result.stderr}")
+            chunks.append(chunk_path)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("ffmpeg timed out while splitting audio")
+
+    return chunks
+
+
 def split_audio_into_chunks(file_path: Path, chunk_minutes: int = MAX_CHUNK_MINUTES) -> list[Path]:
     """Split audio file into chunks of specified duration."""
+    # Try ffmpeg first (faster, more memory-efficient)
+    try:
+        return split_audio_into_chunks_ffmpeg(file_path, chunk_minutes)
+    except Exception as e:
+        print(f"[DEBUG] ffmpeg split failed: {e}, falling back to pydub")
+
+    # Fallback to pydub
     if not PYDUB_AVAILABLE:
         raise ImportError("pydub is required for splitting audio")
 
