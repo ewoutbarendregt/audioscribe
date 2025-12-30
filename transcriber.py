@@ -28,7 +28,25 @@ except ImportError:
 # Maximum chunk duration in minutes (Gemini works best with <15 min chunks)
 MAX_CHUNK_MINUTES = 15
 
-# Note: Gemini auto-detects MIME types for most formats
+# MIME type mapping for audio files
+MIME_TYPES = {
+    '.mp3': 'audio/mpeg',
+    '.m4a': 'audio/mp4',
+    '.mp4': 'audio/mp4',
+    '.wav': 'audio/wav',
+    '.flac': 'audio/flac',
+    '.ogg': 'audio/ogg',
+    '.webm': 'audio/webm',
+    '.aac': 'audio/aac',
+    '.mpeg': 'audio/mpeg',
+    '.mpga': 'audio/mpeg',
+}
+
+
+def get_mime_type(file_path: Path) -> str:
+    """Get MIME type for audio file based on extension."""
+    ext = file_path.suffix.lower()
+    return MIME_TYPES.get(ext, 'audio/mpeg')  # Default to audio/mpeg
 
 
 @dataclass
@@ -191,8 +209,10 @@ def transcribe_chunk_sync(client, file_path: Path, num_speakers: Optional[int] =
 
     log(f"Starting upload: {file_path.name}")
 
-    # Upload the audio file - let Gemini auto-detect MIME type
-    uploaded_file = client.files.upload(file=str(file_path))
+    # Upload the audio file with explicit MIME type
+    mime_type = get_mime_type(file_path)
+    log(f"Using MIME type: {mime_type}")
+    uploaded_file = client.files.upload(file=str(file_path), config={'mime_type': mime_type})
     log(f"Upload complete: {uploaded_file.name}")
 
     # Build the prompt
