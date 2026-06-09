@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="Transcribe audio files with speaker diarization using AI">
     <meta name="theme-color" content="#6366f1">
-    <link rel="manifest" href="/manifest.json">
+    <link rel="manifest" href="manifest.json">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎙️</text></svg>">
     <title>Audio Transcription</title>
     <style>
@@ -586,10 +586,38 @@
 
     <footer>
         Powered by Gemini AI | <span id="appVersion">v...</span>
+        | <button onclick="promptForToken()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:0.875rem;padding:0;text-decoration:underline;">Set API token</button>
     </footer>
 
     <script>
+        // ---------------------------------------------------------------------------
+        // Auth token
+        // ---------------------------------------------------------------------------
+        const TOKEN_KEY = 'audioscribe_token';
+
+        function getStoredToken() {
+            return localStorage.getItem(TOKEN_KEY) || '';
+        }
+
+        function promptForToken() {
+            const existing = getStoredToken();
+            const token = window.prompt(
+                'Enter your API token to use AudioScribe.\n(Leave empty if no token is configured.)',
+                existing
+            );
+            if (token !== null) {
+                localStorage.setItem(TOKEN_KEY, token.trim());
+            }
+        }
+
+        function authHeaders() {
+            const token = getStoredToken();
+            return token ? { 'Authorization': `Bearer ${token}` } : {};
+        }
+
+        // ---------------------------------------------------------------------------
         // State
+        // ---------------------------------------------------------------------------
         let selectedFile = null;
         let transcriptData = null;
 
@@ -717,19 +745,26 @@
             const formData = new FormData();
             formData.append('file', selectedFile);
             formData.append('output_format', outputFormat.value);
-            formData.append('debug', debugMode);
             if (speakerCount.value) {
                 formData.append('speakers', speakerCount.value);
             }
 
             try {
                 // Use fetch with SSE response handling
-                const response = await fetch('/api/transcribe', {
+                const response = await fetch('api/transcribe', {
                     method: 'POST',
+                    headers: authHeaders(),
                     body: formData
                 });
 
                 if (!response.ok) {
+                    if (response.status === 401) {
+                        promptForToken();
+                        throw new Error('Invalid API token. Please try again.');
+                    }
+                    if (response.status === 429) {
+                        throw new Error('Too many requests. Please wait a while before trying again.');
+                    }
                     const error = await response.json();
                     throw new Error(error.detail || 'Transcription failed');
                 }
@@ -907,11 +942,11 @@
 
         // PWA: Register service worker
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('/sw.js').catch(() => {});
+            navigator.serviceWorker.register('sw.js').catch(() => {});
         }
 
         // Fetch and display version
-        fetch('/api/version')
+        fetch('api/version')
             .then(r => r.json())
             .then(data => {
                 if (data && data.version) {

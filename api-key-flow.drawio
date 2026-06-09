@@ -1,0 +1,149 @@
+<mxfile host="app.diagrams.net" version="21.0.0">
+  <diagram name="AudioScribe Key and Deploy Flow" id="api-key-flow">
+    <mxGraphModel dx="1500" dy="950" grid="0" pageScale="1" pageWidth="1500" pageHeight="960" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- ═══════════════ DEPLOY-TIME ═══════════════ -->
+        <mxCell id="bg1" value="Deploy-time  (developer machine + GitHub Container Registry)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=14;fontStyle=1;verticalAlign=top;align=left;spacingLeft=14;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="20" y="20" width="1460" height="255" as="geometry" />
+        </mxCell>
+
+        <!-- Developer -->
+        <mxCell id="dev" value="Developer" style="shape=mxgraph.general.actor;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="60" y="105" width="70" height="95" as="geometry" />
+        </mxCell>
+
+        <!-- deploy.sh -->
+        <mxCell id="deploysh" value="&lt;b&gt;./deploy.sh&lt;/b&gt;&lt;br&gt;1. docker build&lt;br&gt;2. docker push → GHCR&lt;br&gt;3. ssh deploy@host&lt;br&gt;&#160;&#160;&#160;compose --profile&lt;br&gt;&#160;&#160;&#160;audioscribe up -d" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=12;align=left;spacingLeft=10;verticalAlign=top;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="195" y="85" width="250" height="140" as="geometry" />
+        </mxCell>
+
+        <!-- GHCR -->
+        <mxCell id="ghcr" value="&lt;b&gt;GHCR&lt;/b&gt;&lt;br&gt;ghcr.io/&lt;br&gt;ewoutbarendregt/audioscribe" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="510" y="110" width="230" height="90" as="geometry" />
+        </mxCell>
+
+        <!-- GCP Secret Manager -->
+        <mxCell id="sm" value="&lt;b&gt;GCP Secret Manager&lt;/b&gt;&lt;br&gt;project: scribe&lt;br&gt;secret: gemini-API-key" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="900" y="55" width="250" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- env file (one-time) -->
+        <mxCell id="envfile" value="&lt;b&gt;/opt/trustable/audioscribe.env&lt;/b&gt;&lt;br&gt;GEMINI_API_KEY=…&lt;br&gt;API_TOKEN=…&lt;br&gt;(written once per VPS)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="900" y="160" width="250" height="90" as="geometry" />
+        </mxCell>
+
+        <!-- dev → deploy.sh -->
+        <mxCell id="e_dev" value="runs" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=11;" edge="1" source="dev" target="deploysh" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <!-- deploy.sh → ghcr -->
+        <mxCell id="e_push" value="pushes image" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=11;" edge="1" source="deploysh" target="ghcr" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <!-- sm → envfile -->
+        <mxCell id="e_secret" value="copied once (manual,&lt;br&gt;via gcloud)" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=11;dashed=1;strokeColor=#82b366;fontColor=#3a7d34;" edge="1" source="sm" target="envfile" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ═══════════════ RUNTIME ═══════════════ -->
+        <mxCell id="bg2" value="Runtime — Trustable VPS  (deployed identically to STAGING + PROD)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e6f3f0;strokeColor=#67ab9f;fontSize=14;fontStyle=1;verticalAlign=top;align=left;spacingLeft=14;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="20" y="305" width="1460" height="630" as="geometry" />
+        </mxCell>
+
+        <!-- User -->
+        <mxCell id="user" value="User&lt;br&gt;(Browser)" style="shape=mxgraph.general.actor;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="60" y="470" width="70" height="95" as="geometry" />
+        </mxCell>
+
+        <!-- Caddy -->
+        <mxCell id="caddy" value="&lt;b&gt;Caddy&lt;/b&gt;&lt;br&gt;reverse proxy + TLS&lt;br&gt;strips /projects/audioscribe&lt;br&gt;flush_interval -1 (SSE)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="210" y="455" width="250" height="120" as="geometry" />
+        </mxCell>
+
+        <!-- audioscribe container -->
+        <mxCell id="box" value="&lt;b&gt;audioscribe container&lt;/b&gt;  (docker compose --profile audioscribe)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=13;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="540" y="360" width="560" height="430" as="geometry" />
+        </mxCell>
+
+        <!-- env var banner -->
+        <mxCell id="envbanner" value="env_file → GEMINI_API_KEY = ••••••••••••  ✓" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="565" y="405" width="510" height="34" as="geometry" />
+        </mxCell>
+
+        <!-- step 1 -->
+        <mxCell id="s1" value="① Verify Bearer token&lt;br&gt;Authorization: Bearer $API_TOKEN" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="565" y="455" width="510" height="60" as="geometry" />
+        </mxCell>
+        <!-- step 2 -->
+        <mxCell id="s2" value="② Rate limit&lt;br&gt;10 requests / hour / IP  (slowapi)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="565" y="530" width="510" height="60" as="geometry" />
+        </mxCell>
+        <!-- step 3 -->
+        <mxCell id="s3" value="③ Read GEMINI_API_KEY from env&lt;br&gt;os.environ.get('GEMINI_API_KEY')" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="565" y="605" width="510" height="60" as="geometry" />
+        </mxCell>
+        <!-- note -->
+        <mxCell id="note" value="🔒  Key never appears in source code, the image, GHCR, or logs" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="565" y="690" width="510" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- Gemini API -->
+        <mxCell id="gemini" value="&lt;b&gt;Gemini API&lt;/b&gt;&lt;br&gt;gemini-2.5-flash&lt;br&gt;(Google Cloud)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1170" y="475" width="210" height="95" as="geometry" />
+        </mxCell>
+
+        <!-- internal step edges -->
+        <mxCell id="ia1" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" source="s1" target="s2" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ia2" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" source="s2" target="s3" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <!-- user → caddy -->
+        <mxCell id="e_req" value="HTTPS&lt;br&gt;/projects/audioscribe/*&lt;br&gt;Authorization: Bearer …" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=11;" edge="1" source="user" target="caddy" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- caddy → s1 -->
+        <mxCell id="e_proxy" value="proxy to&lt;br&gt;audioscribe:8080&lt;br&gt;(prefix stripped)" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=11;" edge="1" source="caddy" target="s1" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- s3 → gemini -->
+        <mxCell id="e_gem" value="HTTPS + API key" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=11;" edge="1" source="s3" target="gemini" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="1275" y="635" /></Array>
+          </mxGeometry>
+        </mxCell>
+        <!-- gemini → s3 (transcript) -->
+        <mxCell id="e_tr" value="transcript JSON" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=11;dashed=1;" edge="1" source="gemini" target="s3" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="1275" y="655" /><mxPoint x="1075" y="655" /></Array>
+          </mxGeometry>
+        </mxCell>
+        <!-- container → user (SSE) -->
+        <mxCell id="e_sse" value="SSE transcript stream" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=11;dashed=1;" edge="1" source="box" target="user" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="540" y="760" /><mxPoint x="95" y="760" /><mxPoint x="95" y="565" /></Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- ═══ cross-section arrows ═══ -->
+        <!-- GHCR → container (image pulled) -->
+        <mxCell id="e_pull" value="image pulled on each VPS&lt;br&gt;(staging + prod)" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=11;dashed=1;strokeColor=#9673a6;fontColor=#6a4a87;" edge="1" source="ghcr" target="box" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="625" y="290" /><mxPoint x="700" y="290" /><mxPoint x="700" y="360" /></Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- envfile → env banner (injected) -->
+        <mxCell id="e_inject" value="injected as env var&lt;br&gt;(env_file, required:false)" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=11;dashed=1;strokeColor=#d79b00;fontColor=#a06800;" edge="1" source="envfile" target="envbanner" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="1025" y="285" /><mxPoint x="940" y="285" /><mxPoint x="940" y="422" /></Array>
+          </mxGeometry>
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

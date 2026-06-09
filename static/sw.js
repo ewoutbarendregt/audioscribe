@@ -1,8 +1,9 @@
 // Service Worker for Audio Transcription PWA
-const CACHE_NAME = 'transcribe-v1';
+const CACHE_NAME = 'transcribe-v2';
+// Relative so they resolve under the app's mount path (e.g. /projects/audioscribe/)
 const STATIC_ASSETS = [
-    '/',
-    '/manifest.json'
+    './',
+    './manifest.json'
 ];
 
 // Install: cache static assets
@@ -33,8 +34,8 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
     const url = new URL(event.request.url);
 
-    // Always go to network for API calls
-    if (url.pathname.startsWith('/api/')) {
+    // Always go to network for API calls (matches both root and prefixed mounts)
+    if (url.pathname.includes('/api/')) {
         return;
     }
 

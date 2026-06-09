@@ -42,114 +42,104 @@ python main.py
 
 Open http://localhost:8080 in your browser.
 
-## Deploy to Google Cloud Run
+## Deploy to the Trustable.nl VPS fleet (staging + prod)
 
-### 1. Prerequisites
+The app runs as a Docker container on **both** the staging and prod Trustable
+VPSes, behind Caddy:
 
-- [Google Cloud CLI](https://cloud.google.com/sdk/docs/install) installed
-- A Google Cloud project with billing enabled
+- Staging: `https://staging.trustable.nl/projects/audioscribe/`
+- Prod:    `https://trustable.nl/projects/audioscribe/`
 
-### 2. Enable APIs
+Caddy strips the `/projects/audioscribe` prefix before forwarding to the
+container, so the FastAPI app sees plain `/` paths — no app changes needed.
 
-```bash
-gcloud services enable run.googleapis.com
-gcloud services enable secretmanager.googleapis.com
-gcloud services enable artifactregistry.googleapis.com
-```
+### How it fits the trustable stack
 
-### 3. Store API Key in Secret Manager
+AudioScribe is defined in the trustable `docker-compose.yml` under a dedicated
+`audioscribe` Compose profile. The trustable web/api deploy workflows never
+enable that profile, so they **never touch** this container — it is not pulled,
+recreated, or removed as an orphan during a trustable release. AudioScribe has
+its own independent release cycle, driven entirely by `deploy.sh`.
 
-```bash
-# Create secret
-echo -n "YOUR_GEMINI_API_KEY" | gcloud secrets create gemini-api-key --data-file=-
+The Caddy routes live in the trustable repo (`Caddyfile` for prod,
+`Caddyfile.staging` for staging) and are deployed by the trustable workflows.
 
-# Grant Cloud Run access to the secret
-gcloud secrets add-iam-policy-binding gemini-api-key \
-    --member="serviceAccount:YOUR_PROJECT_NUMBER-compute@developer.gserviceaccount.com" \
-    --role="roles/secretmanager.secretAccessor"
-```
+### First-time setup on EACH VPS (run once per host)
 
-To find your project number:
-```bash
-gcloud projects describe YOUR_PROJECT_ID --format="value(projectNumber)"
-```
-
-### 4. Deploy to Cloud Run
+This env file is the single source of truth for the key — nothing else reads
+it (no Secret Manager, no external store). Keep a backup wherever you normally
+store secrets (e.g. a password manager).
 
 ```bash
-cd webapp
+ssh trustable-staging      # then repeat for trustable-prod
 
-# Deploy (builds and deploys in one command)
-gcloud run deploy audio-transcribe \
-    --source . \
-    --region europe-west1 \
-    --allow-unauthenticated \
-    --set-secrets=GEMINI_API_KEY=gemini-api-key:latest \
-    --memory=1Gi \
-    --timeout=600 \
-    --cpu=1
+# Write the env file
+cat > /opt/trustable/audioscribe.env << 'EOF'
+GEMINI_API_KEY=<paste your Gemini key>
+API_TOKEN=<generate with: openssl rand -hex 32>
+EOF
+
+# Owned by the deploy user (which runs docker compose); 640 is sufficient
+chmod 640 /opt/trustable/audioscribe.env
 ```
 
-The deploy command will:
-1. Build the Docker image using Cloud Build
-2. Push to Artifact Registry
-3. Deploy to Cloud Run
+### Deploying
 
-### 5. Access Your App
-
-After deployment, you'll get a URL like:
-```
-https://audio-transcribe-xxxxx-ew.a.run.app
+Make sure you are logged into GHCR:
+```bash
+echo $GHCR_PAT | docker login ghcr.io -u ewoutbarendregt --password-stdin
 ```
 
-## Configuration Options
+Then deploy (the script targets the `trustable-staging` / `trustable-prod`
+SSH config aliases by default):
+```bash
+cd audioscribe
 
-### Cloud Run Settings
+./deploy.sh            # build, push, deploy to BOTH staging and prod
+./deploy.sh staging    # staging only
+./deploy.sh prod       # prod only
+TAG=v1.2.0 ./deploy.sh # deploy a specific image tag
+```
 
-| Setting | Recommended | Description |
-|---------|-------------|-------------|
-| Memory | 1Gi | Audio processing needs memory |
-| CPU | 1 | Sufficient for API calls |
-| Timeout | 600 | Long audio files take time |
-| Max instances | 10 | Prevent runaway costs |
-| Min instances | 0 | Scale to zero when idle |
+The script builds the image once, pushes it to
+`ghcr.io/ewoutbarendregt/audioscribe`, then SSHs to each target host and runs
+`docker compose --profile audioscribe up -d audioscribe` — scoped to just this
+service so the trustable containers are never disturbed.
 
-### Environment Variables
+### Updating the Gemini API key
+
+The key lives in `/opt/trustable/audioscribe.env` on **each** VPS. To rotate it,
+edit the file and recreate the container on each host:
+
+```bash
+ssh trustable-staging      # then repeat for trustable-prod
+nano /opt/trustable/audioscribe.env
+# Recreate (NOT restart) — env_file is only re-read when the container is recreated
+cd /opt/trustable && docker compose --profile audioscribe up -d --force-recreate audioscribe
+```
+
+### Environment variables
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `GEMINI_API_KEY` | Yes | Your Gemini API key |
-| `PORT` | No | Server port (default: 8080) |
+| `GEMINI_API_KEY` | Yes | Gemini API key — lives only in `audioscribe.env` on each VPS |
+| `API_TOKEN` | Recommended | Bearer token clients must send to use `/api/transcribe`. Unset = open (dev only). |
+| `RATE_LIMIT` | No | Requests per hour per IP for `/api/transcribe` (default: `10`) |
 
-## Cost Estimation
-
-- **Cloud Run**: ~$0 when idle (scales to zero)
-- **Gemini API**: Check [Google AI pricing](https://ai.google.dev/pricing)
-- **Cloud Build**: Free tier: 120 build-minutes/day
-
-## Updating the App
-
-To deploy updates:
+### Troubleshooting
 
 ```bash
-cd webapp
-gcloud run deploy audio-transcribe --source .
-```
+ssh deploy@<host>
 
-## Troubleshooting
+# View logs
+cd /opt/trustable && docker compose --profile audioscribe logs audioscribe -f
 
-### "GEMINI_API_KEY not configured"
+# Health check (from anywhere)
+curl https://staging.trustable.nl/projects/audioscribe/health
+curl https://trustable.nl/projects/audioscribe/health
 
-Make sure the secret is properly linked:
-```bash
-gcloud run services describe audio-transcribe --region europe-west1
-```
-
-### Timeout errors
-
-Increase the timeout:
-```bash
-gcloud run services update audio-transcribe --timeout=900
+# Restart
+docker compose --profile audioscribe restart audioscribe
 ```
 
 ### Large file issues

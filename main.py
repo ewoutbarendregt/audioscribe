@@ -3,38 +3,101 @@
 Audio Transcription Web App - FastAPI Backend
 
 A web application for transcribing audio files with speaker diarization
-using the Gemini API. Designed for deployment on Google Cloud Run.
+using the Gemini API. Deployed on the Trustable.nl staging AND prod VPSes
+under /projects/audioscribe (Caddy strips the prefix before requests reach
+this app).
 
-Environment Variables:
-    GEMINI_API_KEY - Your Gemini API key (use Secret Manager in Cloud Run)
+Environment Variables (set in /opt/trustable/audioscribe.env on each VPS):
+    GEMINI_API_KEY - Gemini API key (this env file is the single source of truth)
+    API_TOKEN      - Bearer token clients must send; unset = open (local dev only)
+    RATE_LIMIT     - Requests per hour per IP for /api/transcribe (default: 10)
 """
 
 import asyncio
 import json
+import logging
 import os
 import tempfile
 import uuid
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from starlette.middleware.base import BaseHTTPMiddleware
+from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from transcriber import transcribe_audio_with_progress, TranscriptionResult
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
+
 # App version - increment with each deployment
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
+
+# ---------------------------------------------------------------------------
+# Rate limiting
+# ---------------------------------------------------------------------------
+_rate_limit = os.environ.get("RATE_LIMIT", "10")
+RATE_LIMIT_RULE = f"{_rate_limit}/hour"
+
+limiter = Limiter(key_func=get_remote_address)
 
 app = FastAPI(
     title="Audio Transcription",
     description="Transcribe audio files with speaker diarization using Gemini AI",
     version=APP_VERSION
 )
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# Supported audio formats
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next) -> Response:
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; "
+            "connect-src 'self';"
+        )
+        return response
+
+
+app.add_middleware(SecurityHeadersMiddleware)
+
+# ---------------------------------------------------------------------------
+# Auth
+# ---------------------------------------------------------------------------
+_bearer = HTTPBearer(auto_error=False)
+
+
+async def require_token(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
+) -> None:
+    """Validate bearer token when API_TOKEN env var is configured."""
+    expected = os.environ.get("API_TOKEN")
+    if not expected:
+        return  # Token auth disabled — dev/local mode
+    if not credentials or credentials.credentials != expected:
+        raise HTTPException(status_code=401, detail="Invalid or missing API token.")
+
+
+# ---------------------------------------------------------------------------
+# Supported formats / limits
+# ---------------------------------------------------------------------------
 SUPPORTED_FORMATS = {'.mp3', '.m4a', '.wav', '.flac', '.ogg', '.webm', '.mp4', '.mpeg', '.mpga', '.aac'}
-MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
+MAX_FILE_SIZE = 100 * 1024 * 1024  # 100 MB
 
 # Serve static files
 static_dir = Path(__file__).parent / "static"
@@ -67,12 +130,13 @@ async def get_version():
     return {"version": APP_VERSION}
 
 
-@app.post("/api/transcribe")
+@app.post("/api/transcribe", dependencies=[Depends(require_token)])
+@limiter.limit(RATE_LIMIT_RULE)
 async def transcribe(
+    request: Request,
     file: UploadFile = File(...),
-    speakers: Optional[int] = Form(None),
+    speakers: Optional[int] = Form(None, ge=1, le=20),
     output_format: str = Form("text"),
-    debug: bool = Form(False)
 ):
     """
     Transcribe an uploaded audio file with streaming progress updates.
@@ -83,7 +147,7 @@ async def transcribe(
     if not os.environ.get("GEMINI_API_KEY"):
         raise HTTPException(
             status_code=500,
-            detail="GEMINI_API_KEY not configured. Please set up the API key in Secret Manager."
+            detail="GEMINI_API_KEY not configured. Set it in /opt/trustable/audioscribe.env on the host."
         )
 
     # Validate file extension
@@ -135,8 +199,7 @@ async def transcribe(
                 await progress_queue.put({"type": "progress", "stage": stage, "detail": detail, "percent": percent})
 
             async def debug_callback(message: str):
-                if debug:
-                    await progress_queue.put({"type": "debug", "message": message})
+                await progress_queue.put({"type": "debug", "message": message})
 
             # Start transcription in background
             transcribe_task = asyncio.create_task(
@@ -185,7 +248,8 @@ async def transcribe(
             yield f"data: {json.dumps(result_data)}\n\n"
 
         except Exception as e:
-            error_data = json.dumps({"type": "error", "message": str(e)})
+            logger.error("Transcription failed: %s", e, exc_info=True)
+            error_data = json.dumps({"type": "error", "message": "Transcription failed. Please try again."})
             yield f"data: {error_data}\n\n"
 
         finally:

@@ -16,6 +16,8 @@ build/
 .env
 .env.local
 *.local
+audioscribe.env
+*.env
 
 # IDE
 .idea/
