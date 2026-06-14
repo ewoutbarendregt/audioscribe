@@ -502,6 +502,19 @@ _LIVE_DIA_PROMPT = (
     "Transcribe verbatim in the SAME LANGUAGE as the audio. Ignore silence and non-speech."
 )
 
+def _build_live_dia_prompt(known_speakers: int = 0) -> str:
+    if known_speakers >= 2:
+        return (
+            f"Transcribe this meeting audio with speaker diarization. "
+            f"There are EXACTLY {known_speakers} distinct speakers in this recording — "
+            f"you MUST label all of them as 'Speaker 1' through 'Speaker {known_speakers}'. "
+            f"Do NOT merge distinct voices into fewer speakers. "
+            f"Label consistently in the order they first speak. Return the segments in "
+            f"chronological order, each with an approximate mm:ss start timestamp. "
+            f"Transcribe verbatim in the SAME LANGUAGE as the audio. Ignore silence and non-speech."
+        )
+    return _LIVE_DIA_PROMPT
+
 _INLINE_WAV_MAX = 12_000_000  # ~6 min of 16kHz mono PCM; above this use the Files API
 
 
@@ -516,9 +529,10 @@ def _pcm16_to_wav(pcm: bytes, rate: int = 16000) -> bytes:
     return b.getvalue()
 
 
-async def _diarize_pcm(client: "genai.Client", pcm: bytes) -> list:
+async def _diarize_pcm(client: "genai.Client", pcm: bytes, known_speakers: int = 0) -> list:
     """Diarize a buffer of 16kHz mono Int16 PCM into [{speaker, text, timestamp}]."""
     wav = _pcm16_to_wav(pcm)
+    prompt = _build_live_dia_prompt(known_speakers)
     cfg = types.GenerateContentConfig(
         response_mime_type="application/json",
         response_schema=_LIVE_DIA_SCHEMA,
@@ -528,7 +542,7 @@ async def _diarize_pcm(client: "genai.Client", pcm: bytes) -> list:
     )
     if len(wav) <= _INLINE_WAV_MAX:
         contents = [
-            types.Part(text=_LIVE_DIA_PROMPT),
+            types.Part(text=prompt),
             types.Part(inline_data=types.Blob(mime_type="audio/wav", data=wav)),
         ]
         resp = await asyncio.to_thread(
@@ -547,7 +561,7 @@ async def _diarize_pcm(client: "genai.Client", pcm: bytes) -> list:
             resp = await asyncio.to_thread(
                 client.models.generate_content,
                 model=TEXT_MODEL,
-                contents=[types.Part(text=_LIVE_DIA_PROMPT), f],
+                contents=[types.Part(text=prompt), f],
                 config=cfg,
             )
             try:
@@ -618,7 +632,7 @@ Your only job is to listen to the meeting audio.
 
     buf = bytearray()
     SR_BYTES = 16000 * 2          # bytes per second of 16kHz mono Int16
-    flags = {"stop": False, "gone": False, "done_len": 0}
+    flags = {"stop": False, "gone": False, "done_len": 0, "max_speakers": 0}
     dia_lock = asyncio.Lock()
 
     async def safe_send(payload: dict) -> bool:
@@ -646,10 +660,15 @@ Your only job is to listen to the meeting audio.
             snapshot = bytes(buf[:len(buf)])
             flags["done_len"] = len(snapshot)
             try:
-                segs = await _diarize_pcm(client, snapshot)
+                segs = await _diarize_pcm(client, snapshot, known_speakers=flags["max_speakers"])
             except Exception as e:
                 logger.error("Live diarization failed: %s", e)
                 return
+            # Track the highest unique-speaker count seen — passed back to the next
+            # diarization call so Gemini can't "forget" a speaker it previously identified.
+            n_speakers = len({s["speaker"] for s in segs})
+            if n_speakers > flags["max_speakers"]:
+                flags["max_speakers"] = n_speakers
             await safe_send({"type": "diarized_transcript", "segments": segs, "final": final})
 
     try:
