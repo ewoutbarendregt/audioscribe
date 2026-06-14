@@ -319,6 +319,10 @@ _SUMMARY_SCHEMA = types.Schema(
             type=types.Type.STRING,
             description="A short 2-5 word meeting title.",
         ),
+        "overview": types.Schema(
+            type=types.Type.STRING,
+            description="A complete prose summary of the whole conversation — what was discussed, decided, and concluded — in 1-3 short paragraphs.",
+        ),
         "summary_points": types.Schema(
             type=types.Type.ARRAY,
             description="Key decisions/conclusions, each a single self-contained sentence.",
@@ -337,7 +341,7 @@ _SUMMARY_SCHEMA = types.Schema(
             ),
         ),
     },
-    required=["summary_points", "action_items"],
+    required=["overview", "summary_points", "action_items"],
 )
 
 
@@ -360,10 +364,11 @@ TRANSCRIPT:
 
 RULES:
 1. Focus ONLY on the substance discussed by the human speakers. Ignore any assistant/system acknowledgements or meta-commentary.
-2. summary_points: the key decisions and conclusions, each one clear self-contained sentence.
-3. action_items: concrete follow-ups. Set owner to the responsible person (or "" if unclear) and due to any mentioned deadline (or "").
-4. Write ALL output in the SAME LANGUAGE as the conversation.
-5. Be concise — prefer 2-5 summary points and only genuine action items."""
+2. overview: a complete, readable prose summary of the whole conversation (1-3 short paragraphs) — what was discussed, the context, decisions, and outcomes.
+3. summary_points: the key decisions and conclusions distilled from the overview, each one clear self-contained sentence.
+4. action_items: concrete follow-ups. Set owner to the responsible person (or "" if unclear) and due to any mentioned deadline (or "").
+5. Write ALL output in the SAME LANGUAGE as the conversation.
+6. Be concise — prefer 2-5 summary points and only genuine action items."""
 
     client = genai.Client(api_key=api_key)
     try:
@@ -393,7 +398,11 @@ RULES:
                            "owner": (item.get("owner") or "").strip(),
                            "due": (item.get("due") or "").strip(),
                            "agreement": "pending"})
-    return {"title": data.get("title") or payload.title or "Conversation", "blocks": blocks}
+    return {
+        "title": data.get("title") or payload.title or "Conversation",
+        "overview": (data.get("overview") or "").strip(),
+        "blocks": blocks,
+    }
 
 
 _AMEND_SCHEMA = types.Schema(

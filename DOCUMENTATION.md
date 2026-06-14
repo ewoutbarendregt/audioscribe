@@ -2,6 +2,22 @@
 
 Auto-updated by agents as they work. Newest entries first.
 
+## [2026-06-14] — Complete conversation summary above the points
+
+**Session**: claude/feat/conversation-overview
+**Changed**: main.py, static/index.html, FEATURES.md
+**Summary**: Added a complete prose summary of the conversation at the top of the Review
+screen, above the points to confirm. `/api/summarize-live` now also returns an `overview`
+field (added to the structured schema + prompt as a required 1-3 paragraph narrative). The
+frontend stores `S.overview` and renders it in a "Summary" card (Newsreader serif,
+paragraph-split) above the point cards; when an overview is present the point-cards header
+is relabelled "Key points to confirm" to disambiguate from the prose summary. Resets with
+each new upload / live summarize / home.
+
+**Prompts used**:
+- "for the upload functionality ... I would like to see a complete summary of the
+  conversation appearing above the points to agree on"
+
 ## [2026-06-14] — Transcription activity log + latest Gemini models everywhere
 
 **Session**: claude/feat/transcription-activity-log (+ claude/chore/latest-gemini-models)
