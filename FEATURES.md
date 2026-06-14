@@ -6,6 +6,9 @@ Status: ✅ done · 🟡 partial · ⬜ planned
 - ✅ **Live activity log** — a small 3-line scrollable panel during transcription showing
   the system's real-time progress + debug messages (chunking, upload, model calls) streamed
   from the `/api/transcribe` SSE `progress`/`debug` events.
+- ✅ **Read-only document review** — uploads land on a document (summary → key points →
+  action items → diarized transcript → export), with the live-only read-aloud transport,
+  Interrupt, Agree/Object and "confirm with the room" controls suppressed.
 
 ## Home
 - ✅ Record orb + "Start recording" → live mode

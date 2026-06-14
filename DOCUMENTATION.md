@@ -2,6 +2,26 @@
 
 Auto-updated by agents as they work. Newest entries first.
 
+## [2026-06-14] — Upload review is a read-only document (no live-confirm controls)
+
+**Session**: claude/feat/upload-document-review
+**Changed**: static/index.html, FEATURES.md
+**Summary**: The Review screen previously rendered identically for both sources, so a
+pre-recorded **upload** inherited the whole live-meeting apparatus — the floating
+read-aloud transport bar (play/Interrupt/speed/language), per-item Agree / Object & revise
+buttons, the "confirm with the room" framing, the confirmed-count chip and progress bar —
+none of which make sense when there's no room to read back to. Per user decision, the
+upload review is now a clean document: a `doc = S.source === 'upload'` flag gates all of
+that off. Upload shows H1 "Summary & transcript" + "Transcribed from <file>", then the
+prose Summary, "Key points" (not "…to confirm"), action items, and the full diarized
+transcript; cards are static (no jump/karaoke/agree/object) and full-brightness; exports
+remain available in the transcript-panel header. The live flow is unchanged (transport,
+Interrupt, agree/object, confirm chip all intact — verified).
+
+**Prompts used**:
+- "why am I seeing the button controls at the bottom of the page when I am reviewing a
+  pre-recorded audio session?" → chose "Document, no controls"
+
 ## [2026-06-14] — Complete conversation summary above the points
 
 **Session**: claude/feat/conversation-overview

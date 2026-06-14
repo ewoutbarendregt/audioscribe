@@ -176,7 +176,7 @@ function headerHTML(m) {
         <span style="font-size:12px;font-weight:700;letter-spacing:0.04em;color:#E0735E;">${label}</span>
       </div>
       <span style="font-family:'JetBrains Mono',monospace;font-size:13.5px;color:#CFC8BA;letter-spacing:0.02em;">${fmtTime(S.elapsed)}</span>`;
-  } else if (S.screen === 'review' && !S.reviewLoading) {
+  } else if (S.screen === 'review' && !S.reviewLoading && S.source !== 'upload') {
     right = `
       <div style="display:flex;align-items:center;gap:9px;padding:7px 14px;border-radius:999px;background:rgba(108,192,138,0.12);border:1px solid rgba(108,192,138,0.28);">
         <span style="font-size:13px;">✓</span>
@@ -185,7 +185,7 @@ function headerHTML(m) {
   }
   const showMeta = !m && S.screen !== 'home';
   const meta = S.screen === 'review'
-    ? `${S.blocks.length} points to confirm`
+    ? (S.source === 'upload' ? 'Transcribed file' : `${S.blocks.length} points to confirm`)
     : (S.screen === 'live' ? `${S.segments.length} turns · Today` : '');
   const titleStyle = m
     ? "font-size:14px;font-weight:600;letter-spacing:-0.01em;max-width:46vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"
@@ -387,7 +387,8 @@ function reviewHTML(m) {
   const agreed = S.blocks.filter(b => b.agreement !== 'pending').length;
   const total = S.blocks.length;
   const actionCount = S.blocks.filter(b => b.type === 'action').length;
-  const allDone = !S.reviewLoading && total > 0 && agreed === total;
+  const doc = S.source === 'upload';   // pre-recorded upload = read-only document
+  const allDone = !doc && !S.reviewLoading && total > 0 && agreed === total;
 
   let body;
   if (S.reviewLoading) {
@@ -405,33 +406,35 @@ function reviewHTML(m) {
     const actions = S.blocks.filter(b => b.type === 'action');
     body = `
       ${overviewHTML()}
-      ${summaries.length ? `<div style="font-size:11px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:#A39B8C;margin-bottom:14px;">${S.overview ? 'Key points to confirm' : 'Summary'}</div>
-      <div>${summaries.map((b, i) => cardHTML(b, i + 1, m)).join('')}</div>` : ''}
+      ${summaries.length ? `<div style="font-size:11px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:#A39B8C;margin-bottom:14px;">${doc ? 'Key points' : (S.overview ? 'Key points to confirm' : 'Summary')}</div>
+      <div>${summaries.map((b, i) => cardHTML(b, i + 1, m, doc)).join('')}</div>` : ''}
       ${actions.length ? `<div style="font-size:11px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:#A39B8C;margin:34px 0 14px;display:flex;align-items:center;gap:10px;">Action items <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:${ACCENT};font-weight:500;letter-spacing:0;">${actionCount}</span></div>
-      <div>${actions.map((b, i) => cardHTML(b, i + 1, m)).join('')}</div>` : ''}
+      <div>${actions.map((b, i) => cardHTML(b, i + 1, m, doc)).join('')}</div>` : ''}
       ${total === 0 ? `<div style="color:#A39B8C;font-size:15px;text-align:center;padding:30px;">${S.segments.length ? 'No summary points were produced — see the full transcript below.' : 'No speech could be detected in this audio. Try a clearer recording.'}</div>` : ''}
       ${transcriptPanelHTML()}
       ${allDone ? doneHTML(total) : ''}`;
   }
 
   return `
-  <main style="position:relative;z-index:2;max-width:940px;margin:0 auto;padding:${m ? '22px 16px 160px' : '30px 28px 170px'};">
+  <main style="position:relative;z-index:2;max-width:940px;margin:0 auto;padding:${m ? (doc ? '22px 16px 60px' : '22px 16px 160px') : (doc ? '30px 28px 70px' : '30px 28px 170px')};">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:20px;flex-wrap:wrap;">
       <div style="flex:1;min-width:240px;">
-        <div style="font-family:'Newsreader',serif;font-size:${m ? '24px' : '30px'};font-weight:600;letter-spacing:-0.01em;">Review &amp; confirm with the room</div>
-        <div style="font-size:14px;color:#A39B8C;margin-top:6px;max-width:560px;line-height:1.5;">Audioscribe reads each point aloud. Tap any line to start from there. If someone objects, hit <span style="color:#E0735E;font-weight:600;">Interrupt</span> — capture what they say and revise that item on the spot.</div>
+        <div style="font-family:'Newsreader',serif;font-size:${m ? '24px' : '30px'};font-weight:600;letter-spacing:-0.01em;">${doc ? 'Summary &amp; transcript' : 'Review &amp; confirm with the room'}</div>
+        <div style="font-size:14px;color:#A39B8C;margin-top:6px;max-width:560px;line-height:1.5;">${doc
+          ? `Transcribed from <span style="color:#CFC8BA;">${esc(S.uploadName || 'your audio file')}</span>. Below: a complete summary, the key points, action items and the full diarized transcript.`
+          : `Audioscribe reads each point aloud. Tap any line to start from there. If someone objects, hit <span style="color:#E0735E;font-weight:600;">Interrupt</span> — capture what they say and revise that item on the spot.`}</div>
       </div>
-      <div style="display:flex;align-items:center;gap:10px;padding:11px 16px;border-radius:14px;border:1px solid rgba(244,239,230,0.1);background:rgba(244,239,230,0.03);">
+      ${doc ? '' : `<div style="display:flex;align-items:center;gap:10px;padding:11px 16px;border-radius:14px;border:1px solid rgba(244,239,230,0.1);background:rgba(244,239,230,0.03);">
         <span style="font-family:'JetBrains Mono',monospace;font-size:22px;font-weight:500;color:${ACCENT};">${agreed}</span>
         <span style="font-size:13px;color:#A39B8C;">of ${total}<br>confirmed</span>
-      </div>
+      </div>`}
     </div>
-    <div style="height:5px;border-radius:999px;background:rgba(244,239,230,0.08);overflow:hidden;margin:20px 0 30px;">
+    ${doc ? '<div style="height:30px;"></div>' : `<div style="height:5px;border-radius:999px;background:rgba(244,239,230,0.08);overflow:hidden;margin:20px 0 30px;">
       <div style="height:100%;width:${total ? (agreed / total * 100) : 0}%;background:linear-gradient(90deg,${ACCENT},#6CC08A);border-radius:999px;transition:width .5s ease;"></div>
-    </div>
+    </div>`}
     ${body}
   </main>
-  ${(!S.reviewLoading && total > 0) ? transportHTML(m) : ''}`;
+  ${(!doc && !S.reviewLoading && total > 0) ? transportHTML(m) : ''}`;
 }
 
 function badgeHTML(agreement) {
@@ -467,8 +470,8 @@ function controlRowHTML(block) {
   </div>`;
 }
 
-function cardHTML(block, n, m) {
-  const active = block.id === S.activeId;
+function cardHTML(block, n, m, doc) {
+  const active = !doc && block.id === S.activeId;
   const isAction = block.type === 'action';
   const bar = active ? `<div style="position:absolute;left:0;top:14px;bottom:14px;width:3px;border-radius:3px;background:${ACCENT};box-shadow:0 0 12px ${hexA(ACCENT, 0.6)};"></div>` : '';
   let topLeft;
@@ -483,12 +486,13 @@ function cardHTML(block, n, m) {
     topLeft = `<span style="font-family:'JetBrains Mono',monospace;font-size:12px;color:rgba(244,239,230,0.4);font-weight:500;">${String(n).padStart(2, '0')}</span>`;
   }
   const fs = isAction ? (m ? '16px' : '18px') : (m ? '17.5px' : '20.5px');
-  const txtColor = active ? '#F4EFE6' : (isAction ? 'rgba(244,239,230,0.58)' : 'rgba(244,239,230,0.52)');
-  return `<div data-act="jump" data-id="${block.id}" id="blk-${block.id}" style="position:relative;cursor:pointer;padding:${isAction ? '16px 20px 15px 26px' : '18px 20px 16px 26px'};border-radius:16px;margin-bottom:10px;background:${active ? 'rgba(233,162,59,0.07)' : (isAction ? 'rgba(244,239,230,0.025)' : 'transparent')};border:1px solid ${active ? 'rgba(233,162,59,0.28)' : 'rgba(244,239,230,0.07)'};transition:background .25s, border-color .25s;">
+  const txtColor = doc ? (isAction ? '#CFC8BA' : '#E4DDD0') : (active ? '#F4EFE6' : (isAction ? 'rgba(244,239,230,0.58)' : 'rgba(244,239,230,0.52)'));
+  const clickAttrs = doc ? '' : `data-act="jump" data-id="${block.id}"`;
+  return `<div ${clickAttrs} id="blk-${block.id}" style="position:relative;${doc ? '' : 'cursor:pointer;'}padding:${isAction ? '16px 20px 15px 26px' : '18px 20px 16px 26px'};border-radius:16px;margin-bottom:10px;background:${active ? 'rgba(233,162,59,0.07)' : (isAction ? 'rgba(244,239,230,0.025)' : 'transparent')};border:1px solid ${active ? 'rgba(233,162,59,0.28)' : 'rgba(244,239,230,0.07)'};transition:background .25s, border-color .25s;">
     ${bar}
     <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:11px;flex-wrap:wrap;">${topLeft}${badgeHTML(block.agreement)}</div>
-    <div style="font-family:'Newsreader',serif;font-size:${fs};line-height:1.52;color:${txtColor};">${karaokeHTML(block, active)}</div>
-    ${controlRowHTML(block)}
+    <div style="font-family:'Newsreader',serif;font-size:${fs};line-height:1.52;color:${txtColor};">${doc ? esc(block.text) : karaokeHTML(block, active)}</div>
+    ${doc ? '' : controlRowHTML(block)}
   </div>`;
 }
 
