@@ -130,6 +130,7 @@ const S = {
   dragover: false,
   showTranscript: false,     // full diarized transcript panel on the review screen
   log: [],                   // live activity log shown while transcribing/summarizing
+  overview: '',              // complete prose summary of the conversation
 };
 
 // runtime (non-render) handles
@@ -372,6 +373,16 @@ function logBoxHTML() {
   </div>`;
 }
 
+// Complete prose summary of the conversation, shown above the points to confirm.
+function overviewHTML() {
+  if (!S.overview) return '';
+  const paras = S.overview.split(/\n{2,}/).map(p => p.trim()).filter(Boolean);
+  return `<div style="margin-bottom:30px;border:1px solid rgba(244,239,230,0.09);background:rgba(244,239,230,0.025);border-radius:16px;padding:20px 22px;">
+    <div style="font-size:11px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:#A39B8C;margin-bottom:12px;">Summary</div>
+    ${paras.map((p, i) => `<p style="font-family:'Newsreader',serif;font-size:17px;line-height:1.62;color:#E4DDD0;margin:0;${i ? 'margin-top:12px;' : ''}">${esc(p)}</p>`).join('')}
+  </div>`;
+}
+
 function reviewHTML(m) {
   const agreed = S.blocks.filter(b => b.agreement !== 'pending').length;
   const total = S.blocks.length;
@@ -393,7 +404,8 @@ function reviewHTML(m) {
     const summaries = S.blocks.filter(b => b.type === 'summary');
     const actions = S.blocks.filter(b => b.type === 'action');
     body = `
-      ${summaries.length ? `<div style="font-size:11px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:#A39B8C;margin-bottom:14px;">Summary</div>
+      ${overviewHTML()}
+      ${summaries.length ? `<div style="font-size:11px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:#A39B8C;margin-bottom:14px;">${S.overview ? 'Key points to confirm' : 'Summary'}</div>
       <div>${summaries.map((b, i) => cardHTML(b, i + 1, m)).join('')}</div>` : ''}
       ${actions.length ? `<div style="font-size:11px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:#A39B8C;margin:34px 0 14px;display:flex;align-items:center;gap:10px;">Action items <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:${ACCENT};font-weight:500;letter-spacing:0;">${actionCount}</span></div>
       <div>${actions.map((b, i) => cardHTML(b, i + 1, m)).join('')}</div>` : ''}
@@ -616,7 +628,7 @@ function goHome() {
     uploadError: null, source: 'live', segments: [], elapsed: 0,
     subtitle: 'Listening…', subtitleSpeaker: null, title: 'New conversation',
     reviewLoading: false, blocks: [], activeId: null, wordIndex: 0, listenId: null, captured: '',
-    showTranscript: false, log: [],
+    showTranscript: false, log: [], overview: '',
   });
   render();
 }
@@ -763,7 +775,7 @@ async function stopAndSummarize() {
   commitLiveSegment();
   stopLive();
   const segments = S.segments.slice();
-  Object.assign(S, { screen: 'review', recStatus: 'idle', reviewLoading: true, loadingMsg: 'Summarizing the conversation & extracting action items…', playing: false, showTranscript: false, log: [`✓ captured ${segments.length} turns`, 'Summarizing the conversation…'] });
+  Object.assign(S, { screen: 'review', recStatus: 'idle', reviewLoading: true, loadingMsg: 'Summarizing the conversation & extracting action items…', playing: false, showTranscript: false, overview: '', log: [`✓ captured ${segments.length} turns`, 'Summarizing the conversation…'] });
   render();
   await summarizeSegments(segments, S.title);
 }
@@ -781,7 +793,7 @@ function ingestFile(file) {
     screen: 'review', recStatus: 'idle', source: 'upload', uploadName: name, uploadError: null,
     title: name.replace(/\.[^.]+$/, ''), segments: [], blocks: [], activeId: null, wordIndex: 0,
     playing: false, reviewLoading: true, loadingMsg: 'Uploading ' + name + '…', showTranscript: true,
-    log: ['↥ ' + name + ' queued for transcription'],
+    log: ['↥ ' + name + ' queued for transcription'], overview: '',
   });
   render();
   transcribeUpload(file);
@@ -842,6 +854,7 @@ async function summarizeSegments(segments, title) {
     const data = await resp.json();
     S.blocks = (data.blocks || []).map(b => Object.assign({ owner: '', due: '', agreement: 'pending' }, b));
     if (data.title) S.title = data.title;
+    S.overview = data.overview || '';
     S.reviewLoading = false;
     S.activeId = S.blocks[0] ? S.blocks[0].id : null;
     S.wordIndex = 0;

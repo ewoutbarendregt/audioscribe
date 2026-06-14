@@ -25,6 +25,7 @@ Status: ✅ done · 🟡 partial · ⬜ planned
   diarized speakers from `/api/transcribe`.
 
 ## Review & confirm
+- ✅ **Complete prose summary** of the conversation at the top, above the points to confirm
 - ✅ Structured summary points + action items (owner chip + due date)
 - ✅ Read-aloud (browser TTS) with word-by-word karaoke highlight
 - ✅ Transport bar: prev / play-pause / next / Interrupt / reading-speed / language
