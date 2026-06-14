@@ -2,6 +2,58 @@
 
 Auto-updated by agents as they work. Newest entries first.
 
+## [2026-06-14] — Live Conversation UI redesign (Audioscribe design card)
+
+**Session**: claude/feat/audioscribe-design-redesign
+**Changed**: main.py, requirements.txt, static/index.html, ../.claude/launch.json (new), PLAN.md/BUILD.md/FEATURES.md/TEST.md/BUGS.md (new scaffold)
+**Summary**: Implemented the "warm dark, voice-first" Audioscribe design (fetched from
+the Claude Design handoff bundle at design link `PRb-w-Im86T1ASM03E4SNg`). Full
+frontend rewrite of `static/index.html` as a faithful vanilla-JS recreation of the
+three-screen flow — Home (record orb + drag/drop upload), Live (reactive record orb,
+animated waveform/pulse rings, live caption with speaker chip, real-time transcript,
+participant rail), and Review (read-aloud summary with word-by-word karaoke
+highlighting, agree / object-and-revise per item, floating transport bar, and a
+"Listening to the room" sheet for spoken objections). Dark warm palette (#100F0D /
+#E9A23B amber / #F4EFE6 cream), Hanken Grotesque + Newsreader serif + JetBrains Mono
+via Google Fonts.
+
+Backend (main.py, v1.5.0):
+- Restored & re-developed the live-conversation endpoints that the 2026-06-13 rollback
+  removed: `WS /api/live-record` (streams 16kHz Int16 PCM to the Gemini Live API
+  `gemini-2.5-flash-native-audio-latest`, relays `user_transcript` / `model_text` /
+  `audio_chunk` events; model is a silent observer), `POST /api/summarize-live`, and
+  `POST /api/amend-summary`.
+- Summarization now follows the new design: `summarize-live` returns **structured
+  blocks** (`summary` points + `action` items with owner/due) via a Gemini structured-
+  output schema on `gemini-3.5-flash`; `amend-summary` rewrites a single block from a
+  participant's objection. Both share the model constant `TEXT_MODEL`.
+- Original upload+transcription (`POST /api/transcribe`, SSE) is unchanged; the frontend
+  now feeds its result segments into `summarize-live` so uploads land on the same Review
+  screen.
+- CSP updated to allow Google Fonts (`fonts.googleapis.com` style-src,
+  `fonts.gstatic.com` font-src) + `ws:`/`wss:` connect-src + `blob:` worker/script for
+  the PCM AudioWorklet. `google-genai` pin bumped 1.0.0 → 1.47.0 (Live API support).
+
+Frontend live audio: in-browser AudioWorklet downsamples mic to 16kHz Int16 PCM and
+streams it over the WebSocket; the assistant's 24kHz PCM replies are decoded and played
+via Web Audio. Object → mic-captures the objection into the textarea (operator can also
+type) → `amend-summary` → revised block + read-aloud resumes. Auth token (Bearer for
+HTTP, `?token=` for WS), relative URLs (subpath-safe for `/projects/audioscribe`), and
+service-worker registration preserved.
+
+Verified locally (dummy key): all routes register, server healthy on v1.5.0, CSP header
+correct, `summarize-live` empty-segments path returns `{blocks:[]}`. Frontend verified
+in the preview — Home, Live, Review and the Listening sheet all render pixel-faithfully
+to the design with zero console errors; karaoke highlight advances correctly. NOT yet
+verified end-to-end against a real GEMINI_API_KEY (live mic→Gemini and upload→summarize
+need a real key on the VPS).
+
+**Prompts used**:
+- "implement this design, use the latest gemini models (e.g. gemini 3.5 flash), maintain
+  the original upload and transcription functionality (the summarization function should
+  be according to the new design) and include/redevelop the live conversation logic.
+  Here is the design: … PRb-w-Im86T1ASM03E4SNg … Implement: Audioscribe.dc.html"
+
 ## [2026-06-09] — Security hardening + Trustable VPS deployment
 
 **Session**: claude/security-hardening-and-vps-deploy
