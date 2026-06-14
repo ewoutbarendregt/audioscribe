@@ -1000,6 +1000,7 @@
       <div class="done-actions">
         <button class="btn-green" id="exportSummaryBtn">📤 Export summary</button>
         <button class="btn-sec" id="exportTranscriptBtn">Export transcript</button>
+        <button class="btn-sec" id="exportAudioBtn" style="display: none;">Export audio</button>
         <button class="btn-sec" id="newRecordingBtn">↺ New recording</button>
       </div>
     </div>
@@ -1132,6 +1133,8 @@ let readTimer = null;
 let rateSteps = [0.85, 1, 1.15];
 let rateIdx = 1;
 let listenBlockId = null;
+let recognition = null;
+let isListening = false;
 
 // ═══════════════════════════════════
 //  SCREEN MANAGEMENT
@@ -1456,11 +1459,28 @@ document.getElementById('micBtn').addEventListener('click', async () => {
 document.getElementById('pauseBtn').addEventListener('click', togglePause);
 document.getElementById('stopBtn').addEventListener('click', stopLiveRecording);
 
-function togglePause() {
+async function togglePause() {
   if (!isRecording) return;
   isPaused = !isPaused;
   setRecState(isPaused ? 'paused' : 'recording');
-  if (isPaused) stopAllPlayback();
+  if (isPaused) {
+    stopAllPlayback();
+    if (micStream) {
+      micStream.getTracks().forEach(t => t.stop());
+      micStream = null;
+    }
+  } else {
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (audioContext && audioWorkletNode) {
+        const source = audioContext.createMediaStreamSource(micStream);
+        source.connect(audioWorkletNode);
+      }
+    } catch(err) {
+      showError('Failed to resume microphone: ' + err.message);
+      stopLiveRecording();
+    }
+  }
 }
 
 // ═══════════════════════════════════
@@ -1713,6 +1733,7 @@ async function startReview() {
   document.getElementById('reviewContent').classList.add('hidden');
   document.getElementById('allDonePanel').classList.add('hidden');
   document.getElementById('confirmedBadge').classList.remove('hidden');
+  document.getElementById('exportAudioBtn').style.display = recordedChunks.length > 0 ? 'inline-flex' : 'none';
   updateReviewHeader();
 
   // Fetch summary
@@ -1917,11 +1938,53 @@ function updateReviewHeader() {
 // ═══════════════════════════════════
 function clearReadTimer() { if (readTimer) { clearInterval(readTimer); readTimer = null; } }
 
-function pickVoice() {
+function detectLanguage(text) {
+  if (!text) return 'en-US';
+  const cleanText = text.toLowerCase();
+  const dutchWords = [' de ', ' het ', ' een ', ' en ', ' van ', ' ik ', ' is ', ' op ', ' met ', ' voor ', ' dat ', ' je ', ' we '];
+  const germanWords = [' der ', ' die ', ' das ', ' und ', ' ein ', ' von ', ' ich ', ' ist ', ' auf ', ' mit ', ' für ', ' dass ', ' wir '];
+  const spanishWords = [' el ', ' la ', ' un ', ' y ', ' de ', ' yo ', ' es ', ' en ', ' con ', ' para ', ' que ', ' nosotros '];
+  const frenchWords = [' le ', ' la ', ' un ', ' et ', ' de ', ' je ', ' est ', ' en ', ' avec ', ' pour ', ' que ', ' nous '];
+  
+  let counts = {
+    'nl-NL': 0,
+    'de-DE': 0,
+    'es-ES': 0,
+    'fr-FR': 0
+  };
+  
+  dutchWords.forEach(w => { if (cleanText.includes(w)) counts['nl-NL']++; });
+  germanWords.forEach(w => { if (cleanText.includes(w)) counts['de-DE']++; });
+  spanishWords.forEach(w => { if (cleanText.includes(w)) counts['es-ES']++; });
+  frenchWords.forEach(w => { if (cleanText.includes(w)) counts['fr-FR']++; });
+  
+  let maxLang = 'en-US';
+  let maxCount = 0;
+  for (const lang in counts) {
+    if (counts[lang] > maxCount) {
+      maxCount = counts[lang];
+      maxLang = lang;
+    }
+  }
+  
+  if (maxCount === 0) {
+    const resLangEl = document.getElementById('resLang');
+    const resultLangText = (resLangEl?.textContent || '').toLowerCase();
+    if (resultLangText.includes('dutch') || resultLangText.includes('nl')) return 'nl-NL';
+    if (resultLangText.includes('german') || resultLangText.includes('de')) return 'de-DE';
+    if (resultLangText.includes('spanish') || resultLangText.includes('es')) return 'es-ES';
+    if (resultLangText.includes('french') || resultLangText.includes('fr')) return 'fr-FR';
+    return 'en-US';
+  }
+  return maxLang;
+}
+
+function pickVoice(langCode) {
   try {
     const vs = speechSynthesis.getVoices();
-    return vs.find(v => /en[-_]US/i.test(v.lang) && /Google|Samantha|Natural|Jenny/i.test(v.name))
-      || vs.find(v => /en[-_]US/i.test(v.lang))
+    const langPattern = new RegExp('^' + langCode.split('-')[0], 'i');
+    return vs.find(v => langPattern.test(v.lang) && /Google|Natural|Microsoft|Samantha|Jenny|Nieuw|Lingo/i.test(v.name))
+      || vs.find(v => langPattern.test(v.lang))
       || vs.find(v => /^en/i.test(v.lang))
       || null;
   } catch(e) { return null; }
@@ -1953,8 +2016,10 @@ function speakBlock(id, fromWord) {
     const suffix = (start === 0 && block.type === 'action' && block.due) ? '. Due ' + block.due + '.' : '';
     const utt = new SpeechSynthesisUtterance(prefix + words.slice(start).join(' ') + suffix);
     utt.rate = rateSteps[rateIdx];
-    utt.pitch = 1.0; utt.lang = 'en-US';
-    const v = pickVoice(); if (v) utt.voice = v;
+    utt.pitch = 1.0;
+    const langCode = detectLanguage(block.text);
+    utt.lang = langCode;
+    const v = pickVoice(langCode); if (v) utt.voice = v;
     speechSynthesis.speak(utt);
   } catch(e) {}
 
@@ -2055,6 +2120,65 @@ function agreeBlock(id) {
   updateReviewHeader();
 }
 
+function startListening() {
+  if (isListening) return;
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    console.warn("SpeechRecognition not supported in this browser.");
+    return;
+  }
+  
+  try {
+    recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    
+    const block = reviewBlocks.find(b => b.id === listenBlockId);
+    recognition.lang = block ? detectLanguage(block.text) : 'nl-NL'; 
+    
+    recognition.onresult = (event) => {
+      let finalTranscript = '';
+      let interimTranscript = '';
+      for (let i = event.resultIndex; i < event.results.length; ++i) {
+        if (event.results[i].isFinal) {
+          finalTranscript += event.results[i][0].transcript;
+        } else {
+          interimTranscript += event.results[i][0].transcript;
+        }
+      }
+      
+      const currentVal = finalTranscript || interimTranscript;
+      if (currentVal.trim()) {
+        document.getElementById('capturedInput').value = currentVal.trim();
+      }
+    };
+    
+    recognition.onerror = (event) => {
+      console.error("SpeechRecognition error:", event.error);
+    };
+    
+    recognition.onend = () => {
+      isListening = false;
+      if (listenBlockId && !document.getElementById('listeningModal').classList.contains('hidden')) {
+        try { recognition.start(); isListening = true; } catch(e) {}
+      }
+    };
+    
+    recognition.start();
+    isListening = true;
+  } catch(e) {
+    console.error("Failed to start SpeechRecognition:", e);
+  }
+}
+
+function stopListening() {
+  if (recognition) {
+    try { recognition.stop(); } catch(e) {}
+    recognition = null;
+  }
+  isListening = false;
+}
+
 function objectBlock(id) {
   pauseRead();
   listenBlockId = id;
@@ -2062,11 +2186,13 @@ function objectBlock(id) {
   document.getElementById('listenItemText').textContent = block?.text || '';
   document.getElementById('capturedInput').value = '';
   document.getElementById('listeningModal').classList.remove('hidden');
+  startListening();
 }
 
 document.getElementById('listenClose').addEventListener('click', closeListen);
 document.getElementById('listenCancel').addEventListener('click', closeListen);
 function closeListen() {
+  stopListening();
   document.getElementById('listeningModal').classList.add('hidden');
   listenBlockId = null;
 }
@@ -2144,6 +2270,61 @@ document.getElementById('exportTranscriptBtn').addEventListener('click', () => {
   liveSegments.forEach(s => { c += `${s.speaker}: ${s.text}\n`; });
   downloadBlob(c, 'transcript.txt', 'text/plain');
 });
+
+document.getElementById('exportAudioBtn').addEventListener('click', () => {
+  if (recordedChunks.length === 0) {
+    showError("No audio recorded to download.");
+    return;
+  }
+  const wavBlob = compileWavBlob(recordedChunks, 16000);
+  downloadBlob(wavBlob, "conversation_audio.wav", "audio/wav");
+});
+
+function compileWavBlob(chunks, sampleRate) {
+  let totalLength = 0;
+  chunks.forEach(chunk => {
+    totalLength += chunk.length;
+  });
+  
+  const bufferArr = new ArrayBuffer(totalLength * 2 + 44);
+  const view = new DataView(bufferArr);
+  let pos = 0;
+
+  setUint32(0x46464952);                         // "RIFF"
+  setUint32(totalLength * 2 + 36);               // file length - 8
+  setUint32(0x45564157);                         // "WAVE"
+
+  setUint32(0x20746d66);                         // "fmt " chunk
+  setUint32(16);                                 // chunk length
+  setUint16(1);                                  // sample format (raw PCM)
+  setUint16(1);                                  // channel count (1 = mono)
+  setUint32(sampleRate);                         // sample rate (16000)
+  setUint32(sampleRate * 2);                     // byte rate (sample rate * 2 bytes/sample)
+  setUint16(2);                                  // block align (2 bytes)
+  setUint16(16);                                 // bits per sample (16-bit)
+
+  setUint32(0x61746164);                         // "data" chunk
+  setUint32(totalLength * 2);                    // chunk length
+
+  chunks.forEach(chunk => {
+    for (let i = 0; i < chunk.length; i++) {
+      view.setInt16(pos, chunk[i], true);
+      pos += 2;
+    }
+  });
+
+  return new Blob([bufferArr], { type: "audio/wav" });
+
+  function setUint16(data) {
+    view.setUint16(pos, data, true);
+    pos += 2;
+  }
+
+  function setUint32(data) {
+    view.setUint32(pos, data, true);
+    pos += 4;
+  }
+}
 
 document.getElementById('newRecordingBtn').addEventListener('click', () => {
   pauseRead();
