@@ -2,6 +2,25 @@
 
 Auto-updated by agents as they work. Newest entries first.
 
+## [2026-06-14] — Fix: live transcription empty (wrong Live model)
+
+**Session**: claude/fix/live-model-transcription
+**Changed**: main.py, BUGS.md
+**Summary**: Live recording showed no transcript as you spoke. Root cause: the earlier
+"latest models everywhere" change set `LIVE_MODEL = gemini-3.1-flash-live-preview`, which
+only supports AUDIO output and emits NO input-audio transcription — so `user_transcript`
+events never fired. Verified by streaming real 16kHz speech PCM straight to the Live API:
+`gemini-3.1-flash-live-preview` → `''`; `gemini-2.5-flash-native-audio-latest` →
+"Hello, this is a test of the live transcription system." (and 3.1 rejects TEXT modality
+entirely: 1007 "response modalities (TEXT) is not supported"). Reverted `LIVE_MODEL` to
+`gemini-2.5-flash-native-audio-latest` — the only Live line that transcribes input. The
+WebSocket path itself (app + Caddy proxy upgrade) was confirmed healthy during diagnosis.
+Text/summarize/upload-transcription stay on `gemini-3.5-flash`.
+
+**Prompts used**:
+- "for the live conversation transcription: when I hit record, no text is being shown in
+  the text box as I speak"
+
 ## [2026-06-14] — Upload review is a read-only document (no live-confirm controls)
 
 **Session**: claude/feat/upload-document-review
