@@ -1,5 +1,5 @@
-// Service Worker for Audio Transcription PWA
-const CACHE_NAME = 'transcribe-v2';
+// Service Worker for Audioscribe PWA
+const CACHE_NAME = 'audioscribe-v3';
 // Relative so they resolve under the app's mount path (e.g. /projects/audioscribe/)
 const STATIC_ASSETS = [
     './',
@@ -39,7 +39,23 @@ self.addEventListener('fetch', (event) => {
         return;
     }
 
-    // Cache-first for static assets
+    // Network-first for navigations / the HTML document, so a freshly deployed
+    // app is picked up on the next load (not one reload later). Falls back to
+    // cache when offline.
+    if (event.request.mode === 'navigate' || event.request.destination === 'document') {
+        event.respondWith(
+            fetch(event.request).then((response) => {
+                if (response.ok) {
+                    const clone = response.clone();
+                    caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+                }
+                return response;
+            }).catch(() => caches.match(event.request).then((c) => c || caches.match('./')))
+        );
+        return;
+    }
+
+    // Cache-first for other static assets
     event.respondWith(
         caches.match(event.request).then((cached) => {
             if (cached) {

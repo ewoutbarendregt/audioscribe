@@ -28,6 +28,9 @@ Status: ✅ done · 🟡 partial · ⬜ planned
 - ✅ Object & revise: "Listening" sheet captures the objection (mic or typed) → rewrites
   that item via `amend-summary`, badges it "Revised", resumes reading
 - ✅ "Everyone's aligned" state + Export summary / Export transcript
+- ✅ **Full transcript panel** — diarized, timestamped turns on the Review screen
+  (expanded by default for uploads, collapsed for live); Export transcript/summary
+  always available, not gated on the done state
 - ✅ Responsive (desktop + mobile breakpoint at 640px)
 
 ## Cross-cutting
