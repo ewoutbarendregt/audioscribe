@@ -13,5 +13,16 @@ named speakers, which only holds for the upload flow.
 **Fix**: TBD — options include a separate diarization pass on the captured audio after
 Stop, or speaker-change detection. Not blocking.
 
-_No other known bugs. End-to-end Gemini-backed flows are unverified pending a real API
-key (see TEST.md) — failures there would be logged here._
+### [BUG-002] Live transcript empty — wrong Live model — high
+**Location**: main.py (`LIVE_MODEL`)
+**Status**: fixed
+**Found**: 2026-06-14
+**Description**: No transcript appeared while recording live. `gemini-3.1-flash-live-preview`
+(set during "latest models everywhere") only supports AUDIO output and emits no input-audio
+transcription, so `user_transcript` never fired.
+**Fix**: Reverted `LIVE_MODEL` to `gemini-2.5-flash-native-audio-latest` (the only Live
+line that transcribes input — verified against the API). The native-audio line is 2.5-only;
+there is no 3.x equivalent.
+
+_End-to-end Gemini-backed flows: upload transcription, summarize, amend and now live
+transcription have been exercised against the real API. Live diarization remains BUG-001._

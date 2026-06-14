@@ -46,12 +46,15 @@ logger = logging.getLogger(__name__)
 # App version - increment with each deployment
 APP_VERSION = "1.5.0"
 
-# Gemini models — keep these on the latest available lines.
+# Gemini models.
 #   TEXT_MODEL: latest GA Flash (transcription model lives in transcriber.py).
-#   LIVE_MODEL: latest 3.x Live API model for realtime audio (the 2.5
-#   native-audio line is the older alternative).
+#   LIVE_MODEL: realtime audio for the live conversation. MUST be the
+#   native-audio line — it's the only Live model that emits input-audio
+#   transcription. The 3.x Live preview (gemini-3.1-flash-live-preview) only
+#   supports AUDIO output and returns NO input transcription, which silently
+#   breaks the live transcript (verified against the API 2026-06-14).
 TEXT_MODEL = "gemini-3.5-flash"
-LIVE_MODEL = "gemini-3.1-flash-live-preview"
+LIVE_MODEL = "gemini-2.5-flash-native-audio-latest"
 
 # ---------------------------------------------------------------------------
 # Rate limiting
