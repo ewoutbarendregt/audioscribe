@@ -520,7 +520,11 @@ async def _diarize_pcm(client: "genai.Client", pcm: bytes) -> list:
     """Diarize a buffer of 16kHz mono Int16 PCM into [{speaker, text, timestamp}]."""
     wav = _pcm16_to_wav(pcm)
     cfg = types.GenerateContentConfig(
-        response_mime_type="application/json", response_schema=_LIVE_DIA_SCHEMA
+        response_mime_type="application/json",
+        response_schema=_LIVE_DIA_SCHEMA,
+        # Diarization is mechanical — skip "thinking" to cut latency (~2.5s → ~1.7s)
+        # so the live transcript updates more frequently.
+        thinking_config=types.ThinkingConfig(thinking_budget=0),
     )
     if len(wav) <= _INLINE_WAV_MAX:
         contents = [
@@ -634,7 +638,7 @@ Your only job is to listen to the meeting audio.
         if not final:
             if dia_lock.locked():                 # a diarization is already running
                 return
-            if total - flags["done_len"] < 3 * SR_BYTES:   # <3s of new audio
+            if total - flags["done_len"] < int(1.5 * SR_BYTES):   # <1.5s of new audio
                 return
         async with dia_lock:
             if flags["gone"]:
@@ -708,9 +712,11 @@ Your only job is to listen to the meeting audio.
                     logger.info("Caption relay ended: %s", e)
 
             async def diarize_loop():
+                # Re-diarize the buffer roughly every ~3-4s (diarization ~1.7s with
+                # thinking disabled + a short pause) so turns append in near-real time.
                 try:
                     while not flags["stop"]:
-                        await asyncio.sleep(6)
+                        await asyncio.sleep(1.5)
                         await diarize_and_send(final=False)
                 except asyncio.CancelledError:
                     pass

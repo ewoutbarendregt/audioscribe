@@ -746,6 +746,12 @@ function handleLiveMessage(msg) {
   } else if (msg.type === 'diarized_transcript') {
     // Authoritative speaker-labelled transcript (server re-diarizes the buffer).
     S.segments = (msg.segments || []).map(s => ({ speaker: s.speaker || 'Speaker', text: s.text, tsText: s.timestamp || '' }));
+    // The browser's instant caption is unreliable, so mirror the most recent turn
+    // into the caption box — guarantees visible, recent text every few seconds.
+    if (!msg.final && S.recStatus !== 'idle') {
+      const last = S.segments[S.segments.length - 1];
+      if (last) { _liveBuf = ''; S.subtitle = last.text; S.subtitleSpeaker = last.speaker; }
+    }
     if (S.screen === 'live' || S.reviewLoading) render();
   } else if (msg.type === 'final') {
     if (_liveFinalResolve) { const r = _liveFinalResolve; _liveFinalResolve = null; r(); }
