@@ -467,13 +467,117 @@ RULES:
     }
 
 
+# ---------------------------------------------------------------------------
+# Live diarization — the Gemini Live API only returns a flat input transcript
+# (no speakers), so we ALSO buffer the raw PCM and periodically re-transcribe it
+# with the batch model (gemini-3.5-flash), which diarizes properly. Re-running on
+# the full buffer keeps the Speaker 1/2/… labels self-consistent across updates.
+# ---------------------------------------------------------------------------
+import io
+import wave
+
+_LIVE_DIA_SCHEMA = types.Schema(
+    type=types.Type.OBJECT,
+    properties={
+        "segments": types.Schema(
+            type=types.Type.ARRAY,
+            items=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "speaker": types.Schema(type=types.Type.STRING, description="Consistent label per voice: 'Speaker 1', 'Speaker 2', …"),
+                    "text": types.Schema(type=types.Type.STRING),
+                    "timestamp": types.Schema(type=types.Type.STRING, description="Approximate start as mm:ss."),
+                },
+                required=["speaker", "text"],
+            ),
+        ),
+    },
+    required=["segments"],
+)
+
+_LIVE_DIA_PROMPT = (
+    "Transcribe this meeting audio with speaker diarization. Label distinct speakers "
+    "consistently as 'Speaker 1', 'Speaker 2', etc., in the order they first speak. Return "
+    "the segments in chronological order, each with an approximate mm:ss start timestamp. "
+    "Transcribe verbatim in the SAME LANGUAGE as the audio. Ignore silence and non-speech."
+)
+
+_INLINE_WAV_MAX = 12_000_000  # ~6 min of 16kHz mono PCM; above this use the Files API
+
+
+def _pcm16_to_wav(pcm: bytes, rate: int = 16000) -> bytes:
+    b = io.BytesIO()
+    w = wave.open(b, "wb")
+    w.setnchannels(1)
+    w.setsampwidth(2)
+    w.setframerate(rate)
+    w.writeframes(pcm)
+    w.close()
+    return b.getvalue()
+
+
+async def _diarize_pcm(client: "genai.Client", pcm: bytes) -> list:
+    """Diarize a buffer of 16kHz mono Int16 PCM into [{speaker, text, timestamp}]."""
+    wav = _pcm16_to_wav(pcm)
+    cfg = types.GenerateContentConfig(
+        response_mime_type="application/json", response_schema=_LIVE_DIA_SCHEMA
+    )
+    if len(wav) <= _INLINE_WAV_MAX:
+        contents = [
+            types.Part(text=_LIVE_DIA_PROMPT),
+            types.Part(inline_data=types.Blob(mime_type="audio/wav", data=wav)),
+        ]
+        resp = await asyncio.to_thread(
+            client.models.generate_content, model=TEXT_MODEL, contents=contents, config=cfg
+        )
+    else:
+        tmp = Path(tempfile.gettempdir()) / f"live_{uuid.uuid4().hex}.wav"
+        tmp.write_bytes(wav)
+        try:
+            f = await asyncio.to_thread(client.files.upload, file=str(tmp))
+            for _ in range(40):
+                if getattr(f.state, "name", "") != "PROCESSING":
+                    break
+                await asyncio.sleep(0.5)
+                f = await asyncio.to_thread(client.files.get, name=f.name)
+            resp = await asyncio.to_thread(
+                client.models.generate_content,
+                model=TEXT_MODEL,
+                contents=[types.Part(text=_LIVE_DIA_PROMPT), f],
+                config=cfg,
+            )
+            try:
+                await asyncio.to_thread(client.files.delete, name=f.name)
+            except Exception:
+                pass
+        finally:
+            try:
+                tmp.unlink()
+            except Exception:
+                pass
+    out = []
+    for s in (json.loads(resp.text).get("segments") or []):
+        text = (s.get("text") or "").strip()
+        if text:
+            out.append({
+                "speaker": (s.get("speaker") or "Speaker").strip(),
+                "text": text,
+                "timestamp": (s.get("timestamp") or "").strip(),
+            })
+    return out
+
+
 @app.websocket("/api/live-record")
 async def live_record(websocket: WebSocket, token: Optional[str] = None):
-    """Stream mic PCM to the Gemini Live API and relay real-time transcription back.
+    """Capture mic PCM, relay an instant flat caption from the Gemini Live API, and
+    push a properly diarized transcript built by periodically re-transcribing the
+    buffered audio with the batch model.
 
-    The model acts as a silent observer (it only speaks when directly addressed);
-    the client receives `user_transcript` events to build the live transcript, and
-    `model_text` / `audio_chunk` when the assistant is asked something directly.
+    Events sent to the client:
+      user_transcript    — instant, flat interim caption (Live API)
+      diarized_transcript— {segments:[{speaker,text,timestamp}], final} speaker-labelled
+      model_text/audio_chunk — when the assistant is directly addressed
+      final              — sent after the last diarization once the client sends {"type":"stop"}
     """
     expected = os.environ.get("API_TOKEN")
     if expected and token != expected:
@@ -506,6 +610,29 @@ Your only job is to listen to the meeting audio.
         input_audio_transcription=types.AudioTranscriptionConfig(),
     )
 
+    buf = bytearray()
+    SR_BYTES = 16000 * 2          # bytes per second of 16kHz mono Int16
+    flags = {"stop": False, "done_len": 0}
+    dia_lock = asyncio.Lock()
+
+    async def diarize_and_send(final: bool = False):
+        total = len(buf)
+        if total < SR_BYTES:                      # need >= ~1s of audio
+            return
+        if not final:
+            if dia_lock.locked():                 # a diarization is already running
+                return
+            if total - flags["done_len"] < 3 * SR_BYTES:   # <3s of new audio
+                return
+        async with dia_lock:
+            snapshot = bytes(buf[:len(buf)])
+            flags["done_len"] = len(snapshot)
+            try:
+                segs = await _diarize_pcm(client, snapshot)
+                await websocket.send_json({"type": "diarized_transcript", "segments": segs, "final": final})
+            except Exception as e:
+                logger.error("Live diarization failed: %s", e)
+
     try:
         async with client.aio.live.connect(model=LIVE_MODEL, config=config) as session:
             logger.info("Connected to Gemini Live API")
@@ -513,17 +640,31 @@ Your only job is to listen to the meeting audio.
             async def receive_from_client():
                 try:
                     while True:
-                        data = await websocket.receive_bytes()
-                        await session.send_realtime_input(
-                            audio=types.Blob(data=data, mime_type="audio/pcm;rate=16000")
-                        )
+                        msg = await websocket.receive()
+                        if msg.get("type") == "websocket.disconnect":
+                            break
+                        data = msg.get("bytes")
+                        if data:
+                            buf.extend(data)
+                            try:
+                                await session.send_realtime_input(
+                                    audio=types.Blob(data=data, mime_type="audio/pcm;rate=16000")
+                                )
+                            except Exception:
+                                pass
+                            continue
+                        text = msg.get("text")
+                        if text:
+                            try:
+                                if json.loads(text).get("type") == "stop":
+                                    flags["stop"] = True
+                                    break
+                            except Exception:
+                                pass
                 except WebSocketDisconnect:
                     logger.info("Client disconnected from WebSocket")
-                except Exception as e:
-                    logger.error("Error receiving from client: %s", e)
-                    raise
 
-            async def send_to_client():
+            async def relay_caption():
                 try:
                     async for response in session.receive():
                         sc = response.server_content
@@ -544,21 +685,31 @@ Your only job is to listen to the meeting audio.
                                         "type": "audio_chunk",
                                         "data": base64.b64encode(part.inline_data.data).decode("utf-8"),
                                     })
-                        if sc.turn_complete:
-                            await websocket.send_json({"type": "turn_complete"})
-                        if sc.interrupted:
-                            await websocket.send_json({"type": "interrupted"})
                 except Exception as e:
-                    logger.error("Error sending to client: %s", e)
-                    raise
+                    logger.info("Caption relay ended: %s", e)
 
-            receive_task = asyncio.create_task(receive_from_client(), name="receive_from_client")
-            send_task = asyncio.create_task(send_to_client(), name="send_to_client")
-            done, pending = await asyncio.wait(
-                [receive_task, send_task], return_when=asyncio.FIRST_COMPLETED
-            )
-            for task in pending:
-                task.cancel()
+            async def diarize_loop():
+                try:
+                    while not flags["stop"]:
+                        await asyncio.sleep(6)
+                        await diarize_and_send(final=False)
+                except asyncio.CancelledError:
+                    pass
+
+            recv_task = asyncio.create_task(receive_from_client(), name="recv")
+            cap_task = asyncio.create_task(relay_caption(), name="caption")
+            dia_task = asyncio.create_task(diarize_loop(), name="diarize")
+
+            await recv_task                       # returns on stop signal or disconnect
+            dia_task.cancel()
+            cap_task.cancel()
+
+            # Authoritative final diarization over the whole buffer.
+            await diarize_and_send(final=True)
+            try:
+                await websocket.send_json({"type": "final"})
+            except Exception:
+                pass
     except Exception as e:
         logger.error("Live record WebSocket session error: %s", e)
     finally:

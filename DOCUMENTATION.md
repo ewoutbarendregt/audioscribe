@@ -2,6 +2,30 @@
 
 Auto-updated by agents as they work. Newest entries first.
 
+## [2026-06-14] — Live meeting diarization (speaker-labelled live transcript)
+
+**Session**: claude/feat/live-diarization
+**Changed**: main.py, static/index.html, BUGS.md, FEATURES.md, TEST.md
+**Summary**: Live meetings are now diarized (BUG-001 fixed). The Gemini Live API only
+returns a flat input transcript, so `live_record` now ALSO buffers the raw PCM and a
+background loop re-transcribes the full buffer every ~6s with `gemini-3.5-flash` (`_diarize_pcm`,
+inline audio < ~6 min else Files API), emitting `diarized_transcript` events with
+`Speaker 1/2/…` + mm:ss timestamps. Re-running on the whole buffer keeps speaker labels
+self-consistent across updates. The Live session is kept only for the instant flat
+caption (immediate feedback while speaking). Stop is now a handshake: client sends
+`{"type":"stop"}` → server runs a final authoritative diarization → emits it + a `final`
+event → client summarizes from the diarized turns. Client: `handleLiveMessage` handles
+`diarized_transcript`/`final`, no longer commits flat "Speaker" turns; `stopAndSummarize`
+awaits `waitForFinalDiarization()` (30s timeout). Researched/validated against the real
+API: enumerated all 5 Live models (none diarize input transcription natively; 3.1-live
+only does AUDIO out); batch `gemini-3.5-flash` diarizes a 2-speaker sample perfectly;
+end-to-end live test showed an interim diarized update at +11s and a correct 3-turn final.
+See BUG-003 for the long-meeting full-buffer-cost limitation.
+
+**Prompts used**:
+- "we do need diarization for the live meetings as well, which must be possible with the
+  latest Gemini API's. please research further until you have a solution"
+
 ## [2026-06-14] — Fix: live transcription empty (wrong Live model)
 
 **Session**: claude/fix/live-model-transcription

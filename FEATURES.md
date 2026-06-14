@@ -23,9 +23,10 @@ Status: ✅ done · 🟡 partial · ⬜ planned
 - ✅ Real-time transcript feed (turns append live, auto-scroll)
 - ✅ "In the room" participant rail
 - ✅ Stop & summarize → Review
-- 🟡 Speaker diarization in live mode — Gemini Live input transcription is a single
-  stream, so live turns are labelled generically ("Speaker"). Upload path keeps the
-  diarized speakers from `/api/transcribe`.
+- ✅ **Speaker diarization in live mode** — server buffers the PCM and re-transcribes it
+  every ~6s with `gemini-3.5-flash` to produce Speaker 1/2/… turns with timestamps
+  (interim during recording + an authoritative final pass on Stop). The Live API provides
+  the instant flat caption alongside it. (Long meetings: see BUG-003.)
 
 ## Review & confirm
 - ✅ **Complete prose summary** of the conversation at the top, above the points to confirm
