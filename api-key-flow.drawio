@@ -91,7 +91,7 @@
         </mxCell>
 
         <!-- Gemini API -->
-        <mxCell id="gemini" value="&lt;b&gt;Gemini API&lt;/b&gt;&lt;br&gt;gemini-2.5-flash&lt;br&gt;(Google Cloud)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1">
+        <mxCell id="gemini" value="&lt;b&gt;Gemini API&lt;/b&gt;&lt;br&gt;gemini-3.5-flash&lt;br&gt;(Google Cloud)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1">
           <mxGeometry x="1170" y="475" width="210" height="95" as="geometry" />
         </mxCell>
 

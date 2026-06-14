@@ -1,5 +1,5 @@
 // Service Worker for Audio Transcription PWA
-const CACHE_NAME = 'transcribe-v2';
+const CACHE_NAME = 'transcribe-v3';
 // Relative so they resolve under the app's mount path (e.g. /projects/audioscribe/)
 const STATIC_ASSETS = [
     './',
@@ -30,16 +30,36 @@ self.addEventListener('activate', (event) => {
     self.clients.claim();
 });
 
-// Fetch: network-first for API, cache-first for static
+// Fetch: network-first for HTML/API, cache-first for other static assets
 self.addEventListener('fetch', (event) => {
     const url = new URL(event.request.url);
 
-    // Always go to network for API calls (matches both root and prefixed mounts)
+    // Always go to network for API calls
     if (url.pathname.includes('/api/')) {
         return;
     }
 
-    // Cache-first for static assets
+    // Network-First for HTML/root paths to avoid serving stale layouts after deploy
+    if (url.pathname === '/' || url.pathname.endsWith('/index.html') || url.pathname.endsWith('/')) {
+        event.respondWith(
+            fetch(event.request)
+                .then((response) => {
+                    if (response.ok) {
+                        const responseClone = response.clone();
+                        caches.open(CACHE_NAME).then((cache) => {
+                            cache.put(event.request, responseClone);
+                        });
+                    }
+                    return response;
+                })
+                .catch(() => {
+                    return caches.match(event.request);
+                })
+        );
+        return;
+    }
+
+    // Cache-first for other static assets
     event.respondWith(
         caches.match(event.request).then((cached) => {
             if (cached) {
