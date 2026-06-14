@@ -25,6 +25,10 @@ try:
 except ImportError:
     PYDUB_AVAILABLE = False
 
+# Gemini model for audio transcription + diarization. Keep this on the latest
+# Flash model (matches TEXT_MODEL in main.py).
+TRANSCRIBE_MODEL = "gemini-3.5-flash"
+
 # Maximum chunk duration in minutes (Gemini works best with <15 min chunks)
 MAX_CHUNK_MINUTES = 15
 
@@ -191,13 +195,13 @@ OTHER REQUIREMENTS:
 
 Output the transcription with clear speaker labels and timestamps."""
 
-    log("Sending prompt to Gemini API (model: gemini-2.5-flash)...")
+    log(f"Sending prompt to Gemini API (model: {TRANSCRIBE_MODEL})...")
     log(f"Prompt length: {len(prompt)} characters")
     log("Waiting for API response (this may take 30-60 seconds)...")
 
     # Use structured output for consistent JSON responses
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model=TRANSCRIBE_MODEL,
         contents=[prompt, uploaded_file],
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
