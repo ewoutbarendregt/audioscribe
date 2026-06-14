@@ -143,6 +143,7 @@ let _micCtx = null;
 let _micStream = null;
 let _micNode = null;
 let _liveBuf = '';                 // accumulating interim transcript
+let _liveFinalResolve = null;      // resolves when the server's final diarization arrives
 let _captureMode = false;          // mic feeding the objection textarea
 let _playCtx = null;               // model-audio playback
 let _playHead = 0;
@@ -720,24 +721,21 @@ function updateElapsed() {
 
 function handleLiveMessage(msg) {
   if (msg.type === 'user_transcript') {
+    // Instant flat caption — immediate feedback while speaking.
     if (msg.text) { _liveBuf += msg.text; S.subtitle = _liveBuf; S.subtitleSpeaker = 'Speaker'; if (S.screen === 'live') render(); }
-    if (msg.finished) commitLiveSegment();
-  } else if (msg.type === 'turn_complete') {
-    commitLiveSegment();
+    if (msg.finished) { _liveBuf = ''; S.subtitle = 'Listening…'; S.subtitleSpeaker = null; if (S.screen === 'live') render(); }
+  } else if (msg.type === 'diarized_transcript') {
+    // Authoritative speaker-labelled transcript (server re-diarizes the buffer).
+    S.segments = (msg.segments || []).map(s => ({ speaker: s.speaker || 'Speaker', text: s.text, tsText: s.timestamp || '' }));
+    if (S.screen === 'live' || S.reviewLoading) render();
+  } else if (msg.type === 'final') {
+    if (_liveFinalResolve) { const r = _liveFinalResolve; _liveFinalResolve = null; r(); }
   } else if (msg.type === 'model_text') {
     const txt = (msg.text || '').replace(/^Assistant:\s*/i, '').trim();
-    if (txt) { S.segments.push({ speaker: 'Assistant', text: txt, time: S.elapsed }); if (S.screen === 'live') render(); }
+    if (txt) { S.subtitle = '💬 ' + txt; S.subtitleSpeaker = 'Assistant'; if (S.screen === 'live') render(); }
   } else if (msg.type === 'audio_chunk') {
     playModelAudio(msg.data);
   }
-}
-
-function commitLiveSegment() {
-  const text = _liveBuf.trim();
-  if (text) { S.segments.push({ speaker: 'Speaker', text, time: S.elapsed }); }
-  _liveBuf = '';
-  S.subtitle = 'Listening…'; S.subtitleSpeaker = null;
-  if (S.screen === 'live') render();
 }
 
 function togglePause() {
@@ -776,12 +774,29 @@ function playModelAudio(b64) {
 // Stop & summarize  +  Upload — both produce review blocks
 // ===========================================================================
 async function stopAndSummarize() {
-  commitLiveSegment();
-  stopLive();
-  const segments = S.segments.slice();
-  Object.assign(S, { screen: 'review', recStatus: 'idle', reviewLoading: true, loadingMsg: 'Summarizing the conversation & extracting action items…', playing: false, showTranscript: false, overview: '', log: [`✓ captured ${segments.length} turns`, 'Summarizing the conversation…'] });
+  // Stop sending audio immediately; the server already has the full buffer.
+  S.recStatus = 'idle';
+  clearInterval(_elapsedTimer); _elapsedTimer = null;
+  stopMic();
+  Object.assign(S, { screen: 'review', reviewLoading: true, loadingMsg: 'Finishing the diarized transcript…', playing: false, showTranscript: false, overview: '', log: ['Finalizing diarized transcript…'] });
   render();
-  await summarizeSegments(segments, S.title);
+
+  // Ask the server for the authoritative final diarization, then summarize.
+  await waitForFinalDiarization();
+  stopLive();
+  S.loadingMsg = 'Summarizing the conversation & extracting action items…';
+  S.log.push(`✓ ${S.segments.length} turns transcribed`);
+  render();
+  await summarizeSegments(S.segments.slice(), S.title);
+}
+
+function waitForFinalDiarization() {
+  return new Promise(resolve => {
+    if (!_ws || _ws.readyState !== 1) { resolve(); return; }
+    _liveFinalResolve = resolve;
+    try { _ws.send(JSON.stringify({ type: 'stop' })); } catch (e) {}
+    setTimeout(() => { if (_liveFinalResolve) { _liveFinalResolve = null; resolve(); } }, 30000);
+  });
 }
 
 function ingestFile(file) {
