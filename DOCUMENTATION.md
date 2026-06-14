@@ -2,6 +2,26 @@
 
 Auto-updated by agents as they work. Newest entries first.
 
+## [2026-06-14] — Fix: live recording stalled after ~1s (worklet socket flood)
+
+**Session**: master (hotfix — committed directly; should have branched)
+**Changed**: static/index.html, main.py
+**Summary**: Live recording broke ~1s into real speech. Root cause: the AudioWorklet
+posted every 128-sample render quantum (~375 tiny WebSocket frames/sec), each awaiting
+`session.send_realtime_input` server-side; the read loop fell behind and the socket
+stalled. Fix: the worklet now accumulates and emits ~250ms chunks (~4 frames/sec of
+~8KB), matching the cadence proven in testing (verified in the real browser: 375/s → 4/s,
+WS stays open). Backend hardening: a `gone` flag + `safe_send` (checks `WebSocketState`)
+so nothing is sent after close; the final diarization runs only on an explicit client
+stop (not on disconnect); the caption relay stops once the client is gone — fixes the
+"Unexpected ASGI message 'websocket.send' after 'websocket.close'" error seen in logs.
+Client also now surfaces an unexpected WS drop (shows code, pauses) instead of freezing.
+Diagnosis ruled out: Caddy WS upgrade (fine), the model talking back (stays silent on
+real speech), and the connection path (Python client holds 30s+).
+
+**Prompts used**:
+- "the recording starts correctly, but breaks off after 1 second."
+
 ## [2026-06-14] — Live meeting diarization (speaker-labelled live transcript)
 
 **Session**: claude/feat/live-diarization
