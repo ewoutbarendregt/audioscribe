@@ -324,7 +324,7 @@
       display: flex; align-items: center; justify-content: center;
       box-shadow: 0 0 44px rgba(224,115,94,0.5);
       cursor: pointer; border: none;
-      z-index: 2;
+      z-index: 2; font-size: 38px; color: #fff;
     }
     .mic-btn-idle {
       background: radial-gradient(circle at 36% 30%, #554b3a, #2e2820);
@@ -892,17 +892,7 @@
       <div class="rec-visual" id="recVisual">
         <div class="pulse-ring anim-pulse" id="pulseRing1" style="display:none;"></div>
         <div class="pulse-ring anim-pulse-delay" id="pulseRing2" style="display:none;"></div>
-        <button class="mic-btn mic-btn-idle" id="micBtn" aria-label="Start recording">
-          <div class="wave-bars" id="waveBars">
-            <div class="wave-bar" style="animation:asWave 0.7s ease-in-out infinite alternate;animation-delay:0s;"></div>
-            <div class="wave-bar" style="animation:asWave 0.7s ease-in-out infinite alternate;animation-delay:0.18s;"></div>
-            <div class="wave-bar" style="animation:asWave 0.7s ease-in-out infinite alternate;animation-delay:0.36s;"></div>
-            <div class="wave-bar" style="animation:asWave 0.7s ease-in-out infinite alternate;animation-delay:0.12s;"></div>
-            <div class="wave-bar" style="animation:asWave 0.7s ease-in-out infinite alternate;animation-delay:0.42s;"></div>
-            <div class="wave-bar" style="animation:asWave 0.7s ease-in-out infinite alternate;animation-delay:0.24s;"></div>
-            <div class="wave-bar" style="animation:asWave 0.7s ease-in-out infinite alternate;animation-delay:0.06s;"></div>
-          </div>
-        </button>
+        <button class="mic-btn mic-btn-idle" id="micBtn" aria-label="Start recording">🎙</button>
       </div>
 
       <div>
@@ -911,7 +901,6 @@
       </div>
 
       <div class="rec-controls">
-        <button class="btn-ghost" id="pauseBtn" disabled>⏸ Pause</button>
         <button class="btn-stop" id="stopBtn" disabled>◼ Stop &amp; summarize</button>
       </div>
     </div>
@@ -919,11 +908,11 @@
     <!-- Live caption -->
     <div class="caption-box">
       <div class="caption-header">
-        <span class="caption-dot anim-blink"></span>
+        <span class="caption-dot hidden" id="captionDot"></span>
         <span class="caption-label">Live caption</span>
         <span class="speaker-chip hidden" id="captionSpeakerChip"></span>
       </div>
-      <div class="caption-text" id="captionText">Listening…</div>
+      <div class="caption-text" id="captionText">Not recording</div>
     </div>
 
     <!-- Participants -->
@@ -1360,6 +1349,7 @@ document.getElementById('tabLive').addEventListener('click', () => {
   document.getElementById('tabUpload').classList.remove('active');
   document.getElementById('headerTitle').textContent = 'Live Conversation';
   showScreen('live');
+  setRecState('idle');
   hideError();
 });
 
@@ -1389,32 +1379,36 @@ function setRecState(status) {
   const pulseRing1 = document.getElementById('pulseRing1');
   const pulseRing2 = document.getElementById('pulseRing2');
   const waveBars = document.getElementById('waveBars');
-  const pauseBtn = document.getElementById('pauseBtn');
   const stopBtn = document.getElementById('stopBtn');
   const recBadge = document.getElementById('recBadge');
   const recLabel = document.getElementById('recLabel');
   const elapsedEl = document.getElementById('elapsedDisplay');
   const headline = document.getElementById('recHeadline');
   const sub = document.getElementById('recSub');
+  const captionDot = document.getElementById('captionDot');
+  const captionText = document.getElementById('captionText');
 
   if (status === 'idle') {
     micBtn.className = 'mic-btn mic-btn-idle';
     pulseRing1.style.display = 'none';
     pulseRing2.style.display = 'none';
-    waveBars.style.display = 'none';
+    if (waveBars) waveBars.style.display = 'none';
     micBtn.innerHTML = '🎙';
-    pauseBtn.disabled = true; pauseBtn.textContent = '⏸ Pause';
     stopBtn.disabled = true;
     recBadge.classList.add('hidden');
     elapsedEl.classList.add('hidden');
     headline.textContent = 'Ready to record';
     sub.textContent = 'Click the microphone to start';
+    if (captionDot) {
+      captionDot.classList.add('hidden');
+      captionDot.classList.remove('anim-blink');
+    }
+    if (captionText) captionText.textContent = 'Not recording';
   } else if (status === 'recording') {
     micBtn.className = 'mic-btn';
     pulseRing1.style.display = 'block';
     pulseRing2.style.display = 'block';
-    waveBars.style.display = 'flex';
-    micBtn.innerHTML = `<div class="wave-bars" style="pointer-events:none">
+    micBtn.innerHTML = `<div class="wave-bars" id="waveBars" style="pointer-events:none">
       <div class="wave-bar" style="animation:asWave 0.7s ease-in-out infinite alternate;animation-delay:0s;"></div>
       <div class="wave-bar" style="animation:asWave 0.7s ease-in-out infinite alternate;animation-delay:0.18s;"></div>
       <div class="wave-bar" style="animation:asWave 0.7s ease-in-out infinite alternate;animation-delay:0.36s;"></div>
@@ -1423,24 +1417,32 @@ function setRecState(status) {
       <div class="wave-bar" style="animation:asWave 0.7s ease-in-out infinite alternate;animation-delay:0.24s;"></div>
       <div class="wave-bar" style="animation:asWave 0.7s ease-in-out infinite alternate;animation-delay:0.06s;"></div>
     </div>`;
-    pauseBtn.disabled = false; pauseBtn.textContent = '⏸ Pause';
     stopBtn.disabled = false;
     recBadge.classList.remove('hidden');
     recLabel.textContent = 'REC';
     elapsedEl.classList.remove('hidden');
     headline.textContent = 'Listening…';
     sub.textContent = 'Transcribing & separating speakers in real time. Speak naturally.';
+    if (captionDot) {
+      captionDot.classList.remove('hidden');
+      captionDot.classList.add('anim-blink');
+    }
+    if (captionText) captionText.textContent = 'Listening…';
   } else if (status === 'paused') {
     micBtn.className = 'mic-btn mic-btn-idle';
     pulseRing1.style.display = 'none';
     pulseRing2.style.display = 'none';
     micBtn.innerHTML = '⏸';
-    pauseBtn.disabled = false; pauseBtn.textContent = '▶ Resume';
     stopBtn.disabled = false;
     recBadge.classList.remove('hidden');
     recLabel.textContent = 'PAUSED';
     headline.textContent = 'Recording paused';
     sub.textContent = 'Resume when you\'re ready — the transcript continues where it left off.';
+    if (captionDot) {
+      captionDot.classList.remove('hidden');
+      captionDot.classList.remove('anim-blink');
+    }
+    if (captionText) captionText.textContent = 'Recording paused';
   }
 }
 
@@ -1457,7 +1459,6 @@ document.getElementById('micBtn').addEventListener('click', async () => {
   }
 });
 
-document.getElementById('pauseBtn').addEventListener('click', togglePause);
 document.getElementById('stopBtn').addEventListener('click', stopLiveRecording);
 
 async function togglePause() {
