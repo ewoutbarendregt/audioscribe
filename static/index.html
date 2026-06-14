@@ -129,6 +129,7 @@ const S = {
   rateIdx: 1,
   dragover: false,
   showTranscript: false,     // full diarized transcript panel on the review screen
+  log: [],                   // live activity log shown while transcribing/summarizing
 };
 
 // runtime (non-render) handles
@@ -357,6 +358,20 @@ function transcriptPanelHTML() {
   </div>`;
 }
 
+// Small scrollable activity log (~3 lines) shown while the system works.
+function logBoxHTML() {
+  if (!S.log.length) return '';
+  return `<div style="border:1px solid rgba(244,239,230,0.09);border-radius:12px;background:#141210;overflow:hidden;">
+    <div style="display:flex;align-items:center;gap:8px;padding:9px 13px;border-bottom:1px solid rgba(244,239,230,0.07);">
+      <span style="width:6px;height:6px;border-radius:50%;background:#6CC08A;"></span>
+      <span style="font-size:10.5px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:#A39B8C;">Activity</span>
+    </div>
+    <div id="asLog" style="height:60px;overflow-y:auto;padding:8px 13px;font-family:'JetBrains Mono',monospace;font-size:11.5px;line-height:1.55;color:#A39B8C;">
+      ${S.log.map(l => `<div>${esc(l)}</div>`).join('')}
+    </div>
+  </div>`;
+}
+
 function reviewHTML(m) {
   const agreed = S.blocks.filter(b => b.agreement !== 'pending').length;
   const total = S.blocks.length;
@@ -372,6 +387,7 @@ function reviewHTML(m) {
         <div style="display:flex;align-items:center;gap:10px;justify-content:center;margin-top:10px;color:#A39B8C;font-size:13.5px;">
           <span style="width:7px;height:7px;border-radius:50%;background:${ACCENT};animation:asBlink 1s infinite;"></span>${esc(S.loadingMsg || 'Summarizing…')}
         </div>
+        ${logBoxHTML()}
       </div>`;
   } else {
     const summaries = S.blocks.filter(b => b.type === 'summary');
@@ -546,11 +562,21 @@ function wireDynamic() {
     cap.addEventListener('input', e => { stopMicCapture(); S.captured = e.target.value; });
   }
   if (S.screen === 'live') scrollTranscript();
+  const logEl = document.getElementById('asLog');
+  if (logEl) logEl.scrollTop = logEl.scrollHeight;
 }
 
 function scrollTranscript() {
   const el = document.getElementById('asTranscript');
   if (el) el.scrollTop = el.scrollHeight;
+}
+
+// Append a line to the activity log (cap history) and refresh it while loading.
+function pushLog(line) {
+  if (!line) return;
+  S.log.push(String(line));
+  if (S.log.length > 200) S.log = S.log.slice(-200);
+  if (S.reviewLoading) render();
 }
 
 // ===========================================================================
@@ -590,7 +616,7 @@ function goHome() {
     uploadError: null, source: 'live', segments: [], elapsed: 0,
     subtitle: 'Listening…', subtitleSpeaker: null, title: 'New conversation',
     reviewLoading: false, blocks: [], activeId: null, wordIndex: 0, listenId: null, captured: '',
-    showTranscript: false,
+    showTranscript: false, log: [],
   });
   render();
 }
@@ -737,7 +763,7 @@ async function stopAndSummarize() {
   commitLiveSegment();
   stopLive();
   const segments = S.segments.slice();
-  Object.assign(S, { screen: 'review', recStatus: 'idle', reviewLoading: true, loadingMsg: 'Summarizing the conversation & extracting action items…', playing: false, showTranscript: false });
+  Object.assign(S, { screen: 'review', recStatus: 'idle', reviewLoading: true, loadingMsg: 'Summarizing the conversation & extracting action items…', playing: false, showTranscript: false, log: [`✓ captured ${segments.length} turns`, 'Summarizing the conversation…'] });
   render();
   await summarizeSegments(segments, S.title);
 }
@@ -755,6 +781,7 @@ function ingestFile(file) {
     screen: 'review', recStatus: 'idle', source: 'upload', uploadName: name, uploadError: null,
     title: name.replace(/\.[^.]+$/, ''), segments: [], blocks: [], activeId: null, wordIndex: 0,
     playing: false, reviewLoading: true, loadingMsg: 'Uploading ' + name + '…', showTranscript: true,
+    log: ['↥ ' + name + ' queued for transcription'],
   });
   render();
   transcribeUpload(file);
@@ -787,11 +814,16 @@ async function streamSSE(resp) {
       const line = part.split('\n').find(l => l.startsWith('data:'));
       if (!line) continue;
       let evt; try { evt = JSON.parse(line.slice(5).trim()); } catch (e) { continue; }
-      if (evt.type === 'progress') { S.loadingMsg = (evt.stage || 'Transcribing') + (evt.detail ? ' · ' + evt.detail : ''); if (S.reviewLoading) render(); }
-      else if (evt.type === 'result' && evt.success) {
+      if (evt.type === 'progress') {
+        S.loadingMsg = (evt.stage || 'Transcribing') + (evt.detail ? ' · ' + evt.detail : '');
+        pushLog(`${evt.percent != null ? String(evt.percent).padStart(3) + '%  ' : ''}${evt.stage || ''}${evt.detail ? ' — ' + evt.detail : ''}`);
+      } else if (evt.type === 'debug') {
+        pushLog(evt.message);
+      } else if (evt.type === 'result' && evt.success) {
         segments = (evt.segments || []).map(s => ({ speaker: s.speaker || 'Speaker', text: s.text, tsText: s.timestamp || '', time: 0 }));
         S.segments = segments;
-        S.loadingMsg = 'Summarizing & extracting action items…'; render();
+        S.loadingMsg = 'Summarizing & extracting action items…';
+        pushLog(`✓ transcribed ${segments.length} segments`);
       } else if (evt.type === 'error') { throw new Error(evt.message || 'Transcription failed'); }
     }
   }

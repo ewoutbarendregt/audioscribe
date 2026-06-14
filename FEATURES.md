@@ -2,6 +2,11 @@
 
 Status: ✅ done · 🟡 partial · ⬜ planned
 
+## Upload / transcription
+- ✅ **Live activity log** — a small 3-line scrollable panel during transcription showing
+  the system's real-time progress + debug messages (chunking, upload, model calls) streamed
+  from the `/api/transcribe` SSE `progress`/`debug` events.
+
 ## Home
 - ✅ Record orb + "Start recording" → live mode
 - ✅ Drag-and-drop / click audio upload (MP3, M4A, WAV, FLAC, OGG, WEBM, MP4, AAC; 100MB)

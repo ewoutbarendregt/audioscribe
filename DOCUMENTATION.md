@@ -2,6 +2,27 @@
 
 Auto-updated by agents as they work. Newest entries first.
 
+## [2026-06-14] — Transcription activity log + latest Gemini models everywhere
+
+**Session**: claude/feat/transcription-activity-log (+ claude/chore/latest-gemini-models)
+**Changed**: static/index.html, transcriber.py, main.py, FEATURES.md
+**Summary**: (1) Added a small scrollable (~3-line) "Activity" log to the Review loading
+state. The `/api/transcribe` SSE stream already emitted `progress` and `debug` events; the
+frontend now captures both into `S.log`, renders them in a fixed-height monospace box
+(id `asLog`) that auto-scrolls to the newest line, and resets it per run. Surfaces exactly
+what the system is doing during upload transcription (connect, duration check, chunking,
+upload, model call, segment count). (2) Moved every Gemini call to the latest model line —
+verified available models against the live API: `transcriber.py` transcription
+`gemini-2.5-flash` → `gemini-3.5-flash` (new `TRANSCRIBE_MODEL`); live conversation
+`gemini-2.5-flash-native-audio-latest` → `gemini-3.1-flash-live-preview` (latest 3.x Live
+model; there is no 3.x native-audio model — confirmed the new model accepts our
+LiveConnectConfig). Summarize/amend were already on `gemini-3.5-flash`. No `2.5` refs left.
+
+**Prompts used**:
+- "why did it call gemini 2.5 flash, we need to be calling the latest gemini api's everywhere"
+- "during the transcription of an uploaded audiofile, i need to be able to see what the
+  system is doing, show a small section of 3 lines with the log (scrollable)"
+
 ## [2026-06-14] — Restore diarized transcript view + fix stale service worker
 
 **Session**: claude/fix/restore-diarized-transcript
