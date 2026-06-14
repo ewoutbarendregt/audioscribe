@@ -610,10 +610,22 @@ Your only job is to listen to the meeting audio.
         input_audio_transcription=types.AudioTranscriptionConfig(),
     )
 
+    from starlette.websockets import WebSocketState
+
     buf = bytearray()
     SR_BYTES = 16000 * 2          # bytes per second of 16kHz mono Int16
-    flags = {"stop": False, "done_len": 0}
+    flags = {"stop": False, "gone": False, "done_len": 0}
     dia_lock = asyncio.Lock()
+
+    async def safe_send(payload: dict) -> bool:
+        if flags["gone"] or websocket.application_state != WebSocketState.CONNECTED:
+            return False
+        try:
+            await websocket.send_json(payload)
+            return True
+        except Exception:
+            flags["gone"] = True
+            return False
 
     async def diarize_and_send(final: bool = False):
         total = len(buf)
@@ -625,13 +637,16 @@ Your only job is to listen to the meeting audio.
             if total - flags["done_len"] < 3 * SR_BYTES:   # <3s of new audio
                 return
         async with dia_lock:
+            if flags["gone"]:
+                return
             snapshot = bytes(buf[:len(buf)])
             flags["done_len"] = len(snapshot)
             try:
                 segs = await _diarize_pcm(client, snapshot)
-                await websocket.send_json({"type": "diarized_transcript", "segments": segs, "final": final})
             except Exception as e:
                 logger.error("Live diarization failed: %s", e)
+                return
+            await safe_send({"type": "diarized_transcript", "segments": segs, "final": final})
 
     try:
         async with client.aio.live.connect(model=LIVE_MODEL, config=config) as session:
@@ -642,6 +657,7 @@ Your only job is to listen to the meeting audio.
                     while True:
                         msg = await websocket.receive()
                         if msg.get("type") == "websocket.disconnect":
+                            flags["gone"] = True
                             break
                         data = msg.get("bytes")
                         if data:
@@ -662,16 +678,19 @@ Your only job is to listen to the meeting audio.
                             except Exception:
                                 pass
                 except WebSocketDisconnect:
+                    flags["gone"] = True
                     logger.info("Client disconnected from WebSocket")
 
             async def relay_caption():
                 try:
                     async for response in session.receive():
+                        if flags["gone"]:
+                            break
                         sc = response.server_content
                         if not sc:
                             continue
                         if sc.input_transcription and sc.input_transcription.text:
-                            await websocket.send_json({
+                            await safe_send({
                                 "type": "user_transcript",
                                 "text": sc.input_transcription.text,
                                 "finished": bool(getattr(sc.input_transcription, "finished", False)),
@@ -679,9 +698,9 @@ Your only job is to listen to the meeting audio.
                         if sc.model_turn:
                             for part in sc.model_turn.parts:
                                 if part.text:
-                                    await websocket.send_json({"type": "model_text", "text": part.text})
+                                    await safe_send({"type": "model_text", "text": part.text})
                                 if part.inline_data and part.inline_data.data:
-                                    await websocket.send_json({
+                                    await safe_send({
                                         "type": "audio_chunk",
                                         "data": base64.b64encode(part.inline_data.data).decode("utf-8"),
                                     })
@@ -704,12 +723,11 @@ Your only job is to listen to the meeting audio.
             dia_task.cancel()
             cap_task.cancel()
 
-            # Authoritative final diarization over the whole buffer.
-            await diarize_and_send(final=True)
-            try:
-                await websocket.send_json({"type": "final"})
-            except Exception:
-                pass
+            # Only finalize if the client asked to stop and is still listening;
+            # if it just disconnected there's no socket to send the result to.
+            if flags["stop"] and not flags["gone"]:
+                await diarize_and_send(final=True)
+                await safe_send({"type": "final"})
     except Exception as e:
         logger.error("Live record WebSocket session error: %s", e)
     finally:

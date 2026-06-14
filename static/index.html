@@ -642,19 +642,28 @@ function goHome() {
 // LIVE: mic capture + WebSocket to Gemini Live
 // ===========================================================================
 const WORKLET_SRC = `
+// Downsample mic to 16kHz Int16 and emit ~250ms chunks (NOT every 128-sample
+// quantum — that floods the socket at ~375 msgs/sec and stalls the server).
 class PCMWorklet extends AudioWorkletProcessor {
+  constructor() { super(); this._acc = new Int16Array(8000); this._n = 0; this._target = 4000; }
   process(inputs) {
     const ch = inputs[0][0];
     if (!ch) return true;
     const ratio = sampleRate / 16000;
     const outLen = Math.floor(ch.length / ratio);
-    const out = new Int16Array(outLen);
     for (let i = 0; i < outLen; i++) {
+      if (this._n >= this._acc.length) {
+        const bigger = new Int16Array(this._acc.length * 2); bigger.set(this._acc); this._acc = bigger;
+      }
       let s = ch[Math.floor(i * ratio)];
       s = Math.max(-1, Math.min(1, s));
-      out[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      this._acc[this._n++] = s < 0 ? s * 0x8000 : s * 0x7FFF;
     }
-    this.port.postMessage(out.buffer, [out.buffer]);
+    if (this._n >= this._target) {
+      const out = this._acc.slice(0, this._n);
+      this._n = 0;
+      this.port.postMessage(out.buffer, [out.buffer]);
+    }
     return true;
   }
 }
