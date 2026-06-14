@@ -1483,6 +1483,9 @@ async function togglePause() {
         }
         micSourceNode = audioContext.createMediaStreamSource(micStream);
         micSourceNode.connect(audioWorkletNode);
+        if (audioContext.state === 'suspended') {
+          await audioContext.resume();
+        }
       }
     } catch(err) {
       showError('Failed to resume microphone: ' + err.message);
