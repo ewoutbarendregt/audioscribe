@@ -714,6 +714,16 @@ async function startRecording() {
   try {
     _ws = openWS(handleLiveMessage);
     await new Promise((res, rej) => { _ws.onopen = res; _ws.addEventListener('error', rej, { once: true }); setTimeout(res, 3000); });
+    // Surface an unexpected drop instead of silently freezing the recording.
+    _ws.onclose = (e) => {
+      if (!_liveFinalResolve && S.screen === 'live' && S.recStatus !== 'idle') {
+        console.error('live WS closed', e.code, e.reason);
+        S.recStatus = 'paused';
+        S.subtitle = `Connection closed (code ${e.code}). Tap the orb to resume, or Stop & summarize what was captured.`;
+        S.subtitleSpeaker = null;
+        render();
+      }
+    };
     await startMic(buf => { if (_ws && _ws.readyState === 1 && S.recStatus === 'recording') _ws.send(buf); });
   } catch (err) {
     console.error(err);
