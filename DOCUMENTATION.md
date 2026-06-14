@@ -2,6 +2,33 @@
 
 Auto-updated by agents as they work. Newest entries first.
 
+## [2026-06-14] — Restore diarized transcript view + fix stale service worker
+
+**Session**: claude/fix/restore-diarized-transcript
+**Changed**: static/index.html, static/sw.js
+**Summary**: Fixed two regressions from the redesign. (1) The upload flow routed straight
+into the summary-only Review screen, hiding the original app's primary output — the full
+**diarized, timestamped transcript**. Added a "Full transcript" panel to the Review
+screen (speaker chips + timestamps, turn/speaker counts, expanded by default for uploads,
+collapsed for live) with always-available Export transcript / Export summary buttons (no
+longer gated on the "everyone's aligned" state). The SSE result now preserves each
+segment's `timestamp` string. Empty results now show a clear "No speech could be
+detected" message. (2) `sw.js` was cache-first on the HTML document with background
+revalidate, so every deploy was invisible to returning users until a second reload —
+switched the document/navigation requests to **network-first** (cache fallback offline)
+and bumped `CACHE_NAME` to `audioscribe-v3`. This stale-cache behaviour was a major
+contributor to "the new version doesn't work" after a deploy.
+
+Diagnosis note: staging logs confirmed the backend transcribe pipeline (upload → Gemini
+`gemini-2.5-flash` → diarization, chunking check) works end-to-end; the one failing test
+returned 0 segments because Gemini judged that audio file distorted/silent — not a code
+fault. The real issue was the UI hiding the transcript + the SW serving stale HTML.
+
+**Prompts used**:
+- "the original transcribe function (with diarization and chunking of larger files while
+  maintaining the attribution of sentences to the same people in the conversation) does
+  not seem to work now"
+
 ## [2026-06-14] — Live Conversation UI redesign (Audioscribe design card)
 
 **Session**: claude/feat/audioscribe-design-redesign
