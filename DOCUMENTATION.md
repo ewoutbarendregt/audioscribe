@@ -2,6 +2,27 @@
 
 Auto-updated by agents as they work. Newest entries first.
 
+## [2026-06-14] — Near-real-time live transcript (faster diarization)
+
+**Session**: claude/feat/live-transcript-realtime
+**Changed**: main.py, static/index.html
+**Summary**: After the stall fix, the whole recording was processed but live text barely
+appeared during recording. Diagnosed via acoustic test (spoke into the mic through the
+Mac speakers + browser instrumentation): the Live API instant caption is sparse/unreliable
+in-browser (only ~2 fragments for 12s — likely the worklet's no-filter downsampling
+aliases the audio, which the streaming ASR handles poorly while the batch diarizer is
+robust to it), and the diarized transcript — though correct — only updated ~every 11s.
+Fixes: (1) disable thinking on the diarization call (`ThinkingConfig(thinking_budget=0)`,
+~2.5s→~1.7s); (2) tighten the diarize loop (sleep 1.5s, 1.5s new-audio threshold) → turns
+now append ~every 3-4s; (3) mirror the latest diarized turn into the caption box so recent
+text is always visible. Verified in the real browser with real speech: updates at
+5.6/8.6/11.7/15.4/19.4s…, transcript box populated, caption shows recent text.
+
+**Prompts used**:
+- "the entire audio was processed but the live transcription was not showing in the text
+  box. the interpreted texts must be appended to the recording as they become available in
+  real time"
+
 ## [2026-06-14] — Fix: live recording stalled after ~1s (worklet socket flood)
 
 **Session**: master (hotfix — committed directly; should have branched)
