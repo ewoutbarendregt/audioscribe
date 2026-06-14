@@ -1115,6 +1115,7 @@ let isWorkletLoaded = false;
 let wsConn = null;
 let audioWorkletNode = null;
 let micStream = null;
+let micSourceNode = null;
 let nextPlayTime = 0;
 let activeSources = [];
 let liveSegments = [];
@@ -1469,12 +1470,19 @@ async function togglePause() {
       micStream.getTracks().forEach(t => t.stop());
       micStream = null;
     }
+    if (micSourceNode) {
+      try { micSourceNode.disconnect(); } catch(e) {}
+      micSourceNode = null;
+    }
   } else {
     try {
       micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       if (audioContext && audioWorkletNode) {
-        const source = audioContext.createMediaStreamSource(micStream);
-        source.connect(audioWorkletNode);
+        if (micSourceNode) {
+          try { micSourceNode.disconnect(); } catch(e) {}
+        }
+        micSourceNode = audioContext.createMediaStreamSource(micStream);
+        micSourceNode.connect(audioWorkletNode);
       }
     } catch(err) {
       showError('Failed to resume microphone: ' + err.message);
@@ -1547,7 +1555,10 @@ async function startLiveRecording() {
           isWorkletLoaded = true;
         }
 
-        const source = audioContext.createMediaStreamSource(micStream);
+        if (micSourceNode) {
+          try { micSourceNode.disconnect(); } catch(e) {}
+        }
+        micSourceNode = audioContext.createMediaStreamSource(micStream);
         audioWorkletNode = new AudioWorkletNode(audioContext, 'audio-processor');
 
         audioWorkletNode.port.onmessage = (ev) => {
@@ -1559,7 +1570,7 @@ async function startLiveRecording() {
 
         const silenceGain = audioContext.createGain();
         silenceGain.gain.value = 0;
-        source.connect(audioWorkletNode);
+        micSourceNode.connect(audioWorkletNode);
         audioWorkletNode.connect(silenceGain);
         silenceGain.connect(audioContext.destination);
         nextPlayTime = 0; activeSources = [];
@@ -1617,6 +1628,10 @@ function abortRecording() {
   setRecState('idle');
   clearTimeout(userDebounce);
   micStream?.getTracks().forEach(t => t.stop()); micStream = null;
+  if (micSourceNode) {
+    try { micSourceNode.disconnect(); } catch(e) {}
+    micSourceNode = null;
+  }
   audioWorkletNode?.disconnect(); audioWorkletNode = null;
   stopAllPlayback();
   wsConn?.close(); wsConn = null;
@@ -1631,6 +1646,10 @@ function stopLiveRecording() {
   commitUserSegment();
 
   micStream?.getTracks().forEach(t => t.stop()); micStream = null;
+  if (micSourceNode) {
+    try { micSourceNode.disconnect(); } catch(e) {}
+    micSourceNode = null;
+  }
   audioWorkletNode?.disconnect(); audioWorkletNode = null;
   stopAllPlayback();
   wsConn?.close(); wsConn = null;
@@ -2082,7 +2101,7 @@ function scrollToBlock(id) {
 document.getElementById('tpPlay').addEventListener('click', () => {
   if (isPlaying) { pauseRead(); return; }
   const id = activeBlockId || reviewBlocks[0]?.id;
-  if (id) speakBlock(id, isPlaying ? wordIndex : 0);
+  if (id) speakBlock(id, wordIndex);
 });
 
 document.getElementById('tpPrev').addEventListener('click', () => {
