@@ -2,20 +2,6 @@
 
 Auto-updated by agents as they work. Newest entries first.
 
-## [2026-06-13] — Live Conversation UI Redesign
-
-**Session**: claude/live-conversation-ui-redesign
-**Changed**: static/index.html, main.py
-**Summary**: Full UI overhaul implementing the "Audioscribe Live Conversation UI Redesign" design card. Replaced the previous grey/white UI with a dark warm palette (`#100F0D` bg, `#E9A23B` amber accent, `#F4EFE6` cream text) using Google Fonts (Hanken Grotesque, Newsreader, JetBrains Mono). Added a two-panel live recording screen (recording card with pulse ring + wave bars on the left, live transcript feed on the right) and a new review screen with per-block TTS karaoke word highlighting, agree/object/revise actions, transport bar, and a "Listening" modal for spoken corrections. CSP updated in main.py to allow `fonts.googleapis.com` (style-src) and `fonts.gstatic.com` (font-src).
-**Prompts used**:
-- "Fetch this design file, read its readme, and implement the relevant aspects of the design. https://api.anthropic.com/v1/design/h/AEN80I1FKDUiZ77QVv9edw?open_file=Audioscribe.dc.html — Implement: Audioscribe.dc.html"
-
-## [2026-06-12] — Live Conversation Mode (Real-time Recording & Diarization)
-
-**Session**: antigravity/live-conversation-recording-and-transcription
-**Changed**: main.py, static/index.html
-**Summary**: Added a new "Live Conversation Mode" allowing users to record meetings. Streams 16kHz Int16 PCM mono audio from the browser to Gemini Live API (`gemini-2.5-flash-native-audio-latest`) over WebSockets. Performs real-time speaker diarization and transcription, plays back AI clarification prompts in a warm female voice (`Aoede`), cancels audio buffers on barge-in/interruption, and generates meeting summaries/action items using `gemini-3.5-flash` with the ability to read them aloud via browser-native text-to-speech.
-
 ## [2026-06-09] — Security hardening + Trustable VPS deployment
 
 **Session**: claude/security-hardening-and-vps-deploy
