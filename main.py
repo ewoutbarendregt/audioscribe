@@ -9,8 +9,11 @@ this app).
 
 Environment Variables (set in /opt/trustable/audioscribe.env on each VPS):
     GEMINI_API_KEY - Gemini API key (this env file is the single source of truth)
-    API_TOKEN      - Bearer token clients must send; unset = open (local dev only)
+    API_TOKEN      - Legacy bearer token for scripted/programmatic access
     RATE_LIMIT     - Requests per hour per IP for /api/transcribe (default: 10)
+
+Interactive users sign in with an emailed one-time code instead of a token; see
+auth.py for that flow and the environment it needs (ALLOWED_EMAILS, SMTP_*, …).
 """
 
 import asyncio
@@ -18,6 +21,7 @@ import base64
 import json
 import logging
 import os
+import secrets
 import tempfile
 import uuid
 from pathlib import Path
@@ -39,6 +43,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from transcriber import transcribe_audio_with_progress, TranscriptionResult
+import auth
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -95,21 +100,99 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 app.add_middleware(SecurityHeadersMiddleware)
 
 # ---------------------------------------------------------------------------
-# Auth
+# Auth — an emailed one-time code buys a session cookie (interactive users), and
+# the legacy API_TOKEN bearer still works for scripted access.
 # ---------------------------------------------------------------------------
 _bearer = HTTPBearer(auto_error=False)
 
 
-async def require_token(
+def _valid_bearer(credentials: Optional[HTTPAuthorizationCredentials]) -> bool:
+    expected = os.environ.get("API_TOKEN")
+    if not expected or not credentials:
+        return False
+    return secrets.compare_digest(credentials.credentials, expected)
+
+
+async def require_auth(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
-) -> None:
-    """Validate bearer token when API_TOKEN env var is configured."""
-    expected = os.environ.get("API_TOKEN")
-    if not expected:
-        return  # Token auth disabled — dev/local mode
-    if not credentials or credentials.credentials != expected:
-        raise HTTPException(status_code=401, detail="Invalid or missing API token.")
+) -> str:
+    """Accept a valid session cookie or the legacy bearer token. Fails closed."""
+    email = auth.session_email(request.cookies.get(auth.SESSION_COOKIE))
+    if email:
+        return email
+    if _valid_bearer(credentials):
+        return "api-token"
+    raise HTTPException(status_code=401, detail="Sign in to continue.")
+
+
+@app.on_event("startup")
+async def _startup() -> None:
+    auth.init_db()
+    auth.purge_expired()
+    if not auth.allowed_emails():
+        logger.warning("ALLOWED_EMAILS is empty — nobody can sign in with a code.")
+
+
+class OtpRequest(BaseModel):
+    email: str
+
+
+class OtpVerify(BaseModel):
+    email: str
+    code: str
+
+
+@app.post("/api/auth/request-otp")
+@limiter.limit("5/hour")
+async def request_otp(request: Request, payload: OtpRequest):
+    """Email a login code. Always reports success so the allowlist can't be probed."""
+    email = auth.normalize_email(payload.email)
+    if email and email in auth.allowed_emails():
+        code = auth.create_otp(email)
+        try:
+            await asyncio.to_thread(auth.send_otp_email, email, code)
+        except Exception as e:
+            logger.error("Failed to send login code to %s: %s", email, e)
+            raise HTTPException(status_code=502, detail="Could not send the email. Try again.")
+    else:
+        logger.info("Login code requested for non-allowlisted address")
+    return {"ok": True}
+
+
+@app.post("/api/auth/verify-otp")
+@limiter.limit("10/hour")
+async def verify_otp(request: Request, payload: OtpVerify, response: Response):
+    email = auth.normalize_email(payload.email)
+    code = (payload.code or "").strip()
+    if not email or not code or not auth.verify_otp(email, code):
+        raise HTTPException(status_code=401, detail="That code is invalid or has expired.")
+    token = auth.create_session(email)
+    response.set_cookie(
+        auth.SESSION_COOKIE,
+        token,
+        max_age=auth.SESSION_TTL_SECONDS,
+        httponly=True,
+        secure=auth.COOKIE_SECURE,
+        samesite="lax",
+        path=auth.COOKIE_PATH,
+    )
+    return {"ok": True, "email": email}
+
+
+@app.get("/api/auth/me")
+async def auth_me(request: Request):
+    email = auth.session_email(request.cookies.get(auth.SESSION_COOKIE))
+    if not email:
+        raise HTTPException(status_code=401, detail="Not signed in.")
+    return {"ok": True, "email": email}
+
+
+@app.post("/api/auth/logout")
+async def auth_logout(request: Request, response: Response):
+    auth.delete_session(request.cookies.get(auth.SESSION_COOKIE))
+    response.delete_cookie(auth.SESSION_COOKIE, path=auth.COOKIE_PATH)
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
@@ -136,11 +219,7 @@ async def root():
 @app.get("/health")
 async def health_check():
     """Health check endpoint for Cloud Run."""
-    return {
-        "status": "healthy",
-        "version": APP_VERSION,
-        "api_key_configured": bool(os.environ.get("GEMINI_API_KEY"))
-    }
+    return {"status": "healthy", "version": APP_VERSION}
 
 
 @app.get("/api/version")
@@ -149,7 +228,7 @@ async def get_version():
     return {"version": APP_VERSION}
 
 
-@app.post("/api/transcribe", dependencies=[Depends(require_token)])
+@app.post("/api/transcribe", dependencies=[Depends(require_auth)])
 @limiter.limit(RATE_LIMIT_RULE)
 async def transcribe(
     request: Request,
@@ -348,7 +427,7 @@ _SUMMARY_SCHEMA = types.Schema(
 )
 
 
-@app.post("/api/summarize-live", dependencies=[Depends(require_token)])
+@app.post("/api/summarize-live", dependencies=[Depends(require_auth)])
 @limiter.limit(RATE_LIMIT_RULE)
 async def summarize_live(request: Request, payload: SummarizeRequest):
     """Turn a transcript into structured review blocks (summary points + action items)."""
@@ -419,7 +498,7 @@ _AMEND_SCHEMA = types.Schema(
 )
 
 
-@app.post("/api/amend-summary", dependencies=[Depends(require_token)])
+@app.post("/api/amend-summary", dependencies=[Depends(require_auth)])
 @limiter.limit(RATE_LIMIT_RULE)
 async def amend_summary(request: Request, payload: AmendRequest):
     """Revise a single review block based on a participant's spoken objection."""
@@ -597,9 +676,15 @@ async def live_record(websocket: WebSocket, token: Optional[str] = None):
       model_text/audio_chunk — when the assistant is directly addressed
       final              — sent after the last diarization once the client sends {"type":"stop"}
     """
+    # Cookies ride the WebSocket handshake, so the session alone authenticates here —
+    # no secret in the URL (which proxies write to their access logs). The legacy
+    # ?token= bearer stays accepted for scripted clients.
     expected = os.environ.get("API_TOKEN")
-    if expected and token != expected:
-        logger.warning("WebSocket auth failed: invalid or missing token.")
+    authed = bool(auth.session_email(websocket.cookies.get(auth.SESSION_COOKIE)))
+    if not authed and expected and token:
+        authed = secrets.compare_digest(token, expected)
+    if not authed:
+        logger.warning("WebSocket auth failed: no valid session or token.")
         await websocket.close(code=1008)
         return
 

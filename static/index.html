@@ -57,21 +57,23 @@
    ========================================================================= */
 
 // ---------------------------------------------------------------------------
-// Auth token (Bearer for HTTP, ?token= for the WebSocket)
+// Auth — an emailed one-time code buys an httpOnly session cookie. The cookie
+// rides both fetch (credentials: same-origin) and the WebSocket handshake, so no
+// secret is ever held in JS or placed in a URL.
 // ---------------------------------------------------------------------------
-const TOKEN_KEY = 'audioscribe_token';
-const getToken = () => localStorage.getItem(TOKEN_KEY) || '';
-function promptForToken() {
-  const token = window.prompt('Enter your API token to use Audioscribe.\n(Leave empty if no token is configured.)', getToken());
-  if (token !== null) { localStorage.setItem(TOKEN_KEY, token.trim()); }
-}
-const authHeaders = () => { const t = getToken(); return t ? { 'Authorization': 'Bearer ' + t } : {}; };
 const baseDir = () => location.pathname.replace(/[^/]*$/, '');
 const apiUrl = (p) => baseDir() + p;
 function wsUrl() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const t = getToken();
-  return proto + '//' + location.host + baseDir() + 'api/live-record' + (t ? ('?token=' + encodeURIComponent(t)) : '');
+  return proto + '//' + location.host + baseDir() + 'api/live-record';
+}
+
+// Any 401 anywhere in the app funnels through here.
+function showLogin() {
+  S.screen = 'login';
+  S.loginStep = 'email';
+  S.loginBusy = false;
+  render();
 }
 
 // ---------------------------------------------------------------------------
@@ -107,7 +109,12 @@ const isMobile = () => window.innerWidth <= 640;
 // State
 // ---------------------------------------------------------------------------
 const S = {
-  screen: 'home',            // home | live | review
+  screen: 'login',           // login | home | live | review
+  loginStep: 'email',        // email | code
+  loginEmail: '',
+  loginError: '',
+  loginBusy: false,
+  userEmail: '',             // the signed-in address
   recStatus: 'idle',         // idle | recording | paused
   elapsed: 0,
   segments: [],              // {speaker, text, time}
@@ -157,6 +164,11 @@ const app = document.getElementById('app');
 
 function render() {
   const m = isMobile();
+  if (S.screen === 'login') {          // no chrome until signed in
+    app.innerHTML = loginHTML(m);
+    wireDynamic();
+    return;
+  }
   let html = headerHTML(m);
   if (S.screen === 'home') html += homeHTML(m);
   else if (S.screen === 'live') html += liveHTML(m);
@@ -164,6 +176,49 @@ function render() {
   if (S.listening) html += listeningHTML();
   app.innerHTML = html;
   wireDynamic();
+}
+
+function loginHTML(m) {
+  const code = S.loginStep === 'code';
+  const err = S.loginError
+    ? `<div style="margin-top:14px;padding:9px 14px;border-radius:11px;background:rgba(224,115,94,0.12);border:1px solid rgba(224,115,94,0.3);color:#E0735E;font-size:12.5px;font-weight:600;">${esc(S.loginError)}</div>`
+    : '';
+  const field = `width:100%;padding:13px 15px;border-radius:13px;border:1px solid rgba(244,239,230,0.16);background:rgba(244,239,230,0.04);color:#F4EFE6;font-family:inherit;font-size:15px;outline:none;`;
+  const btn = `width:100%;margin-top:12px;padding:13px;border-radius:13px;border:none;background:${ACCENT};color:#1a1206;font-size:14.5px;font-weight:700;cursor:pointer;box-shadow:0 6px 20px rgba(233,162,59,0.28);`;
+
+  const body = code ? `
+    <div style="font-size:13.5px;color:#A39B8C;margin-bottom:20px;line-height:1.5;">
+      We sent a 6-digit code to<br><span style="color:#EDE6D9;font-weight:600;">${esc(S.loginEmail)}</span>
+    </div>
+    <input id="asCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6"
+      placeholder="000000" value=""
+      style="${field}text-align:center;font-family:'JetBrains Mono',monospace;font-size:26px;letter-spacing:0.34em;padding-left:0.34em;" />
+    <button data-act="submitCode" style="${btn}" ${S.loginBusy ? 'disabled' : ''}>${S.loginBusy ? 'Checking…' : 'Sign in'}</button>
+    <div style="display:flex;justify-content:space-between;margin-top:16px;font-size:12.5px;">
+      <span data-act="loginBack" style="color:#6f685c;cursor:pointer;text-decoration:underline;">Use another address</span>
+      <span data-act="resendCode" style="color:${ACCENT};cursor:pointer;text-decoration:underline;">Resend code</span>
+    </div>` : `
+    <div style="font-size:13.5px;color:#A39B8C;margin-bottom:20px;line-height:1.5;">
+      Enter your email and we'll send you a one-time sign-in code.
+    </div>
+    <input id="asEmail" type="email" autocomplete="email" placeholder="you@example.com"
+      value="${esc(S.loginEmail)}" style="${field}" />
+    <button data-act="submitEmail" style="${btn}" ${S.loginBusy ? 'disabled' : ''}>${S.loginBusy ? 'Sending…' : 'Send code'}</button>`;
+
+  return `
+  <main style="position:relative;z-index:2;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:${m ? '30px 20px' : '40px 28px'};">
+    <div style="width:100%;max-width:390px;">
+      <div style="display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:30px;">
+        <div style="width:14px;height:14px;border-radius:50%;background:${ACCENT};box-shadow:0 0 16px rgba(233,162,59,0.75);"></div>
+        <span style="font-weight:800;font-size:19px;letter-spacing:-0.02em;">audioscribe</span>
+      </div>
+      <div style="border:1px solid rgba(244,239,230,0.09);background:linear-gradient(180deg,#1c1814,#161310);border-radius:22px;padding:30px 26px;">
+        <h1 style="font-family:'Newsreader',serif;font-size:25px;font-weight:500;margin:0 0 4px;letter-spacing:-0.01em;">Sign in</h1>
+        ${body}
+        ${err}
+      </div>
+    </div>
+  </main>`;
 }
 
 function headerHTML(m) {
@@ -242,7 +297,10 @@ function homeHTML(m) {
     </label>
     <input id="asFileInput" type="file" accept=".mp3,.m4a,.wav,.flac,.ogg,.webm,.mp4,.aac" style="display:none;" />
     ${S.uploadError ? `<div style="margin-top:12px;padding:9px 14px;border-radius:11px;background:rgba(224,115,94,0.12);border:1px solid rgba(224,115,94,0.3);color:#E0735E;font-size:12.5px;font-weight:600;max-width:430px;">${esc(S.uploadError)}</div>` : ''}
-    <div data-act="setToken" style="margin-top:30px;font-size:12px;color:#6f685c;cursor:pointer;text-decoration:underline;">Set API token</div>
+    <div style="margin-top:30px;font-size:12px;color:#6f685c;display:flex;align-items:center;gap:8px;">
+      ${S.userEmail ? `<span>Signed in as ${esc(S.userEmail)}</span><span style="opacity:0.5;">·</span>` : ''}
+      <span data-act="signOut" style="cursor:pointer;text-decoration:underline;">Sign out</span>
+    </div>
   </main>`;
 }
 
@@ -606,6 +664,22 @@ function wireDynamic() {
   if (cap) {
     cap.addEventListener('input', e => { stopMicCapture(); S.captured = e.target.value; });
   }
+  // Login fields: autofocus and submit on Enter.
+  const emailEl = document.getElementById('asEmail');
+  if (emailEl) {
+    emailEl.focus();
+    emailEl.addEventListener('keydown', e => { if (e.key === 'Enter') submitEmail(); });
+  }
+  const codeEl = document.getElementById('asCode');
+  if (codeEl) {
+    codeEl.focus();
+    codeEl.addEventListener('keydown', e => { if (e.key === 'Enter') submitCode(); });
+    // Auto-submit once all six digits are in — one less click on a phone.
+    codeEl.addEventListener('input', e => {
+      e.target.value = e.target.value.replace(/\D/g, '');
+      if (e.target.value.length === 6) submitCode();
+    });
+  }
   if (S.screen === 'live') scrollTranscript();
   const logEl = document.getElementById('asLog');
   if (logEl) logEl.scrollTop = logEl.scrollHeight;
@@ -638,7 +712,8 @@ document.addEventListener('click', e => {
 
 const ACTIONS = {
   goHome, startRecording, togglePause, stopAndSummarize,
-  setToken: () => { promptForToken(); },
+  submitEmail, submitCode, resendCode, signOut,
+  loginBack: () => { S.loginStep = 'email'; S.loginError = ''; render(); },
   agree: id => agree(id),
   object: id => objectBlock(id),
   objectActive: () => objectBlock(S.activeId || (S.blocks[0] && S.blocks[0].id)),
@@ -663,6 +738,102 @@ function goHome() {
     reviewLoading: false, blocks: [], activeId: null, wordIndex: 0, listenId: null, captured: '',
     showTranscript: false, log: [], overview: '',
   });
+  render();
+}
+
+// ===========================================================================
+// Auth — email → one-time code → session cookie
+// ===========================================================================
+async function submitEmail() {
+  if (S.loginBusy) return;
+  const el = document.getElementById('asEmail');
+  const email = (el ? el.value : '').trim();
+  if (!email || !email.includes('@')) { S.loginError = 'Enter a valid email address.'; render(); return; }
+  S.loginEmail = email; S.loginError = ''; S.loginBusy = true; render();
+  try {
+    const res = await fetch(apiUrl('api/auth/request-otp'), {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    S.loginBusy = false;
+    if (res.status === 429) { S.loginError = 'Too many requests. Try again later.'; render(); return; }
+    if (!res.ok) { S.loginError = 'Could not send the code. Try again.'; render(); return; }
+    // Success is reported even for unknown addresses so the allowlist can't be probed.
+    S.loginStep = 'code'; S.loginError = ''; render();
+  } catch (e) {
+    S.loginBusy = false; S.loginError = 'Network error. Try again.'; render();
+  }
+}
+
+async function submitCode() {
+  if (S.loginBusy) return;
+  const el = document.getElementById('asCode');
+  const code = (el ? el.value : '').trim();
+  if (code.length !== 6) { S.loginError = 'Enter the 6-digit code.'; render(); return; }
+  S.loginError = ''; S.loginBusy = true; render();
+  try {
+    const res = await fetch(apiUrl('api/auth/verify-otp'), {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: S.loginEmail, code }),
+    });
+    S.loginBusy = false;
+    if (!res.ok) {
+      S.loginError = res.status === 429
+        ? 'Too many attempts. Request a new code later.'
+        : 'That code is invalid or has expired.';
+      render();
+      return;
+    }
+    const data = await res.json();
+    S.userEmail = data.email || S.loginEmail;
+    S.loginError = '';
+    S.screen = 'home';
+    render();
+  } catch (e) {
+    S.loginBusy = false; S.loginError = 'Network error. Try again.'; render();
+  }
+}
+
+// Resend reuses the stored address — the email input is gone from the DOM by now.
+async function resendCode() {
+  if (S.loginBusy || !S.loginEmail) return;
+  S.loginBusy = true; S.loginError = ''; render();
+  try {
+    await fetch(apiUrl('api/auth/request-otp'), {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: S.loginEmail }),
+    });
+  } catch (e) {}
+  S.loginBusy = false; render();
+}
+
+async function signOut() {
+  try {
+    await fetch(apiUrl('api/auth/logout'), { method: 'POST', credentials: 'same-origin' });
+  } catch (e) {}
+  stopReadAloud(); stopMicCapture(); stopLive();
+  S.userEmail = ''; S.loginEmail = ''; S.loginStep = 'email'; S.loginError = '';
+  S.screen = 'login';
+  render();
+}
+
+// On boot, ask the server whether the cookie is still good.
+async function checkSession() {
+  try {
+    const res = await fetch(apiUrl('api/auth/me'), { credentials: 'same-origin' });
+    if (res.ok) {
+      const data = await res.json();
+      S.userEmail = data.email || '';
+      S.screen = 'home';
+    } else {
+      S.screen = 'login';
+    }
+  } catch (e) {
+    S.screen = 'login';
+  }
   render();
 }
 
@@ -881,9 +1052,9 @@ function ingestFile(file) {
 function transcribeUpload(file) {
   const fd = new FormData();
   fd.append('file', file);
-  fetch(apiUrl('api/transcribe'), { method: 'POST', headers: authHeaders(), body: fd })
+  fetch(apiUrl('api/transcribe'), { method: 'POST', credentials: 'same-origin', body: fd })
     .then(resp => {
-      if (resp.status === 401) { S.reviewLoading = false; S.uploadError = 'Invalid or missing API token.'; S.screen = 'home'; render(); promptForToken(); return null; }
+      if (resp.status === 401) { S.reviewLoading = false; showLogin(); return null; }
       if (!resp.ok || !resp.body) throw new Error('Transcription failed (' + resp.status + ')');
       return streamSSE(resp);
     })
@@ -925,10 +1096,10 @@ async function summarizeSegments(segments, title) {
   if (!segments.length) { S.reviewLoading = false; S.blocks = []; render(); return; }
   try {
     const resp = await fetch(apiUrl('api/summarize-live'), {
-      method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
+      method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ segments: segments.map(s => ({ speaker: s.speaker, text: s.text })), title }),
     });
-    if (resp.status === 401) { S.reviewLoading = false; S.screen = 'home'; render(); promptForToken(); return; }
+    if (resp.status === 401) { S.reviewLoading = false; showLogin(); return; }
     if (!resp.ok) throw new Error('Summary failed (' + resp.status + ')');
     const data = await resp.json();
     S.blocks = (data.blocks || []).map(b => Object.assign({ owner: '', due: '', agreement: 'pending' }, b));
@@ -1116,10 +1287,10 @@ async function applyRevision() {
   try {
     const transcript = S.segments.map(s => `${s.speaker}: ${s.text}`).join('\n');
     const resp = await fetch(apiUrl('api/amend-summary'), {
-      method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
+      method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ block_type: block.type, block_text: block.text, owner: block.owner || '', due: block.due || '', objection, transcript }),
     });
-    if (resp.status === 401) { render(); promptForToken(); return; }
+    if (resp.status === 401) { showLogin(); return; }
     if (!resp.ok) throw new Error('Amend failed (' + resp.status + ')');
     const data = await resp.json();
     S.blocks = S.blocks.map(b => b.id === id ? Object.assign({}, b, {
@@ -1166,7 +1337,8 @@ function exportTranscript() {
 // ===========================================================================
 window.addEventListener('resize', () => render());
 if (window.speechSynthesis) { try { window.speechSynthesis.getVoices(); window.speechSynthesis.onvoiceschanged = () => {}; } catch (e) {} }
-render();
+render();          // paint the login shell immediately…
+checkSession();    // …then swap to home if the session cookie is still valid
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(() => {});

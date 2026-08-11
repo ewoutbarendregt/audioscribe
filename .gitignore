@@ -39,3 +39,7 @@ htmlcov/
 
 # Cloud
 .gcloudignore
+
+# Local auth database (dev fallback when DATA_DIR is unavailable)
+data/
+*.db

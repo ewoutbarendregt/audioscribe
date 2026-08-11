@@ -77,6 +77,15 @@ ssh trustable-staging      # then repeat for trustable-prod
 cat > /opt/trustable/audioscribe.env << 'EOF'
 GEMINI_API_KEY=<paste your Gemini key>
 API_TOKEN=<generate with: openssl rand -hex 32>
+
+# Interactive sign-in — users receive a one-time code by email
+ALLOWED_EMAILS=you@example.com,colleague@example.com
+SMTP_HOST=smtp.resend.com
+SMTP_PORT=587
+SMTP_USER=resend
+SMTP_PASS=<Resend API key>
+MAIL_FROM=audioscribe@trustable.nl
+COOKIE_PATH=/projects/audioscribe
 EOF
 
 # Owned by the deploy user (which runs docker compose); 640 is sufficient
@@ -123,8 +132,24 @@ cd /opt/trustable && docker compose --profile audioscribe up -d --force-recreate
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `GEMINI_API_KEY` | Yes | Gemini API key — lives only in `audioscribe.env` on each VPS |
-| `API_TOKEN` | Recommended | Bearer token clients must send to use `/api/transcribe`. Unset = open (dev only). |
+| `ALLOWED_EMAILS` | Yes | Comma-separated allowlist of addresses that may sign in. Empty = nobody can. |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` | Yes | Mail transport for the login code. Resend: `smtp.resend.com` / `587` / `resend` / *(API key)*. Unset = codes are logged to stdout instead (local dev only). |
+| `MAIL_FROM` | Yes | Sender address; its domain must be verified with the mail provider |
+| `COOKIE_PATH` | Yes in prod | Cookie scope. `/projects/audioscribe` behind Caddy; `/` locally. |
+| `API_TOKEN` | No | Legacy bearer token for scripted access to the API. Interactive users sign in instead. |
+| `SESSION_TTL_DAYS` | No | How long a sign-in lasts (default: `30`) |
+| `OTP_TTL_MINUTES` | No | Login-code lifetime (default: `10`) |
+| `COOKIE_SECURE` | No | `false` only for plain-HTTP local dev (default: `true`) |
+| `DATA_DIR` | No | Where the auth SQLite database lives (default: `/data`, a named volume) |
 | `RATE_LIMIT` | No | Requests per hour per IP for `/api/transcribe` (default: `10`) |
+
+### Signing in
+
+Audioscribe has its own login — it is *hosted* under `trustable.nl/projects/audioscribe`
+but shares nothing else with trustable, so it deliberately does not reuse trustable's
+session or admin allowlist. Users enter their email, receive a 6-digit code, and get an
+httpOnly session cookie valid for `SESSION_TTL_DAYS`. Add or remove people by editing
+`ALLOWED_EMAILS` and recreating the container.
 
 ### Troubleshooting
 
