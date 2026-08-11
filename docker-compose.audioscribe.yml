@@ -1,0 +1,26 @@
+# AudioScribe-only compose overlay.
+#
+# Why this file exists: the base /opt/trustable/docker-compose.yml is owned by the
+# trustable repo and is overwritten by trustable's own deploy workflow (it scp's the
+# file). Declaring AudioScribe's storage there would mean our change only reaches the
+# VPS whenever *trustable* next deploys, and would put AudioScribe config in a repo it
+# otherwise has nothing to do with.
+#
+# Instead deploy.sh ships this overlay alongside it and starts the service with
+#   docker compose -f docker-compose.yml -f docker-compose.audioscribe.yml \
+#                  --profile audioscribe up -d audioscribe
+# Since deploy.sh is the only thing that ever starts this service, it fully controls
+# how it launches. Trustable's deploys never pass --profile audioscribe, so they never
+# touch the container (and it is not an "orphan" — the base file still defines it).
+#
+# The named volume holds the auth SQLite database (sessions + one-time codes), so
+# signing in survives redeploys. The image creates /data owned by uid 1000, which the
+# volume inherits on first mount.
+
+services:
+  audioscribe:
+    volumes:
+      - audioscribe_data:/data
+
+volumes:
+  audioscribe_data:

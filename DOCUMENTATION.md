@@ -2,6 +2,60 @@
 
 Auto-updated by agents as they work. Newest entries first.
 
+## [2026-06-14] — Email one-time-code sign-in (replaces the API-token prompt)
+
+**Session**: claude/feat/email-otp-auth
+**Changed**: auth.py (new), main.py, static/index.html, Dockerfile, deploy.sh,
+docker-compose.audioscribe.yml (new), README.md, FEATURES.md
+**Summary**: Opening the app on a second laptop popped a raw `window.prompt` for an API
+token — bad UX and weak security (one static shared secret in `localStorage`, sent as a
+query param on the WebSocket so it landed in Caddy logs, and the app was **fully open**
+whenever `API_TOKEN` was unset). Replaced with a proper sign-in.
+
+**SSO decision**: trustable's cookie is scoped `domain=.trustable.nl, path=/`, so it
+already reaches `/projects/audioscribe/*`, and trustable's `api` is on the same Docker
+network — Caddy `forward_auth` would have worked. Rejected: trustable's login gates on an
+admin/customer allowlist in its Postgres, so every Audioscribe user would need to be
+provisioned there, and the gate would live in trustable's Caddyfile. Audioscribe is only
+*hosted* under that domain, so it keeps its own gate and stays portable.
+
+New `auth.py`: SQLite at `DATA_DIR/audioscribe.db` with `otp_codes` + `sessions`. Both
+codes and session tokens are stored **sha256-hashed**, so a leaked DB can't be replayed.
+6-digit codes, 10-min TTL, single-use, 5-attempt cap; sessions 30 days. Mail goes over
+stdlib `smtplib` to Resend SMTP (no new dependency); with SMTP unset the code is logged
+instead, which is how the flow was tested locally.
+
+Endpoints: `request-otp` (always returns `{ok:true}` so the allowlist can't be probed;
+5/hour rate limit), `verify-otp` (sets the httpOnly cookie), `me`, `logout`.
+`require_token` → `require_auth`: session cookie **or** legacy `Bearer API_TOKEN`, now
+using `secrets.compare_digest` and **failing closed** when neither is present. The
+WebSocket authenticates from the cookie on the handshake — no secret in the URL at all.
+`/health` no longer reports `api_key_configured`.
+
+Frontend: new two-step login screen in the existing dark-warm design (email → 6-digit
+code, autofocus, Enter-to-submit, auto-submit on the 6th digit, resend). Deleted
+`promptForToken`/`TOKEN_KEY`/`authHeaders`; every fetch now sends `credentials:
+'same-origin'` and any 401 bounces to the login screen. Added "Signed in as … · Sign out".
+
+Storage is a named volume declared in a new `docker-compose.audioscribe.yml` **overlay**
+shipped by `deploy.sh`, rather than in trustable's `docker-compose.yml` — that file is
+scp'd (and overwritten) by trustable's own deploy workflow, so a change there would only
+reach the VPS on trustable's next deploy and would put Audioscribe config in an unrelated
+repo.
+
+Verified locally end-to-end: fail-closed 401s, silent allowlist, wrong/expired/reused code
+rejected, 5-attempt cap, hashes-not-plaintext at rest, legacy bearer still working, logout
+invalidating the session; and in a real browser: full login, cookie invisible to JS,
+empty localStorage, WebSocket opening on the cookie alone, session surviving reload.
+
+**Prompts used**:
+- "when I try to use the app on a different laptop, I get this message … we need to
+  secure the app behind a password. Since the app is deployed under
+  trustable.nl/projects/audioscribe, could we use the same authentication mechanism we
+  use for the trustable website, or do we require the user to login separately. other
+  than the hosting location there is no relationship between trustable and the app"
+- "I have a trustable email provider and we can also use resend"
+
 ## [2026-06-14] — Near-real-time live transcript (faster diarization)
 
 **Session**: claude/feat/live-transcript-realtime

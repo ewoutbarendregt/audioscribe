@@ -26,9 +26,20 @@
 #   ssh trustable-staging   # then repeat for trustable-prod
 #   cat > /opt/trustable/audioscribe.env << 'EOF'
 #   GEMINI_API_KEY=<paste your Gemini key>
-#   API_TOKEN=<generate with: openssl rand -hex 32>
+#   API_TOKEN=<generate with: openssl rand -hex 32>   # legacy/scripted access only
+#   # --- interactive sign-in (emailed one-time code) ---
+#   ALLOWED_EMAILS=you@example.com,colleague@example.com
+#   SMTP_HOST=smtp.resend.com
+#   SMTP_PORT=587
+#   SMTP_USER=resend
+#   SMTP_PASS=<Resend API key>
+#   MAIL_FROM=audioscribe@trustable.nl      # domain must be verified in Resend
+#   COOKIE_PATH=/projects/audioscribe       # cookie scope behind the Caddy prefix
 #   EOF
 #   chmod 640 /opt/trustable/audioscribe.env
+#
+# Sessions live in a SQLite database on the audioscribe_data volume (see
+# docker-compose.audioscribe.yml), so sign-ins survive redeploys.
 
 set -euo pipefail
 
@@ -77,6 +88,10 @@ echo ""
 deploy_to_host() {
   local host="$1"
   echo "→ Deploying to ${host}..."
+  # Ship the AudioScribe-only compose overlay (declares the /data volume that holds
+  # the auth database). It lives here rather than in trustable's docker-compose.yml
+  # because that file is owned and overwritten by trustable's own deploy.
+  scp -q "${SCRIPT_DIR}/docker-compose.audioscribe.yml" "${host}:/opt/trustable/"
   ssh "${host}" bash -s -- "${TAG}" << 'REMOTE'
 set -euo pipefail
 TAG="$1"
@@ -90,12 +105,13 @@ fi
 
 # --profile audioscribe scopes every command to JUST this service, so the
 # trustable web/api/db/caddy containers are never touched by this deploy.
-AUDIOSCRIBE_IMAGE_TAG="${TAG}" docker compose --profile audioscribe pull audioscribe
-AUDIOSCRIBE_IMAGE_TAG="${TAG}" docker compose --profile audioscribe up -d audioscribe
+COMPOSE="docker compose -f docker-compose.yml -f docker-compose.audioscribe.yml"
+AUDIOSCRIBE_IMAGE_TAG="${TAG}" $COMPOSE --profile audioscribe pull audioscribe
+AUDIOSCRIBE_IMAGE_TAG="${TAG}" $COMPOSE --profile audioscribe up -d audioscribe
 docker image prune -f
 
 sleep 3
-docker compose --profile audioscribe ps audioscribe
+$COMPOSE --profile audioscribe ps audioscribe
 REMOTE
   echo "   ✓ ${host} done."
   echo ""

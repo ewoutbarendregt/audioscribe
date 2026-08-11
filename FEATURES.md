@@ -43,6 +43,16 @@ Status: ✅ done · 🟡 partial · ⬜ planned
   always available, not gated on the done state
 - ✅ Responsive (desktop + mobile breakpoint at 640px)
 
+## Sign-in
+- ✅ **Email one-time-code login** — enter your address, get a 6-digit code, receive an
+  httpOnly session cookie (30 days). Self-contained: no dependency on trustable's login.
+- ✅ Allowlist via `ALLOWED_EMAILS`; unknown addresses get the same "code sent" response
+  so the list can't be probed
+- ✅ Codes and session tokens stored sha256-hashed; single-use, 10-min TTL, 5-attempt cap
+- ✅ WebSocket authenticates from the cookie on the handshake — no token in any URL
+- ✅ "Signed in as … · Sign out"; any 401 returns you to the login screen
+- ✅ Legacy `Bearer API_TOKEN` still accepted for scripted API access
+
 ## Cross-cutting
-- ✅ Bearer/`?token=` auth, rate limiting, security headers
+- ✅ Rate limiting, security headers
 - ✅ PWA manifest + service worker, subpath-safe relative URLs
