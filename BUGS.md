@@ -31,6 +31,17 @@ transcription, so `user_transcript` never fired.
 line that transcribes input — verified against the API). The native-audio line is 2.5-only;
 there is no 3.x equivalent.
 
+### [BUG-004] Prod will lock out if deployed before its env vars are set — high
+**Location**: /opt/trustable/audioscribe.env on trustable-prod, main.py (`require_auth`)
+**Status**: open — action needed before the next prod deploy
+**Found**: 2026-06-14
+**Description**: `require_auth` now **fails closed**, and the frontend no longer sends an
+API token. Prod's env file still has only `GEMINI_API_KEY` + `API_TOKEN`, so deploying
+the new image there before adding `ALLOWED_EMAILS` / `COOKIE_PATH` (and the SMTP block)
+would leave nobody able to sign in. Staging has already been updated.
+**Fix**: add the sign-in vars to `/opt/trustable/audioscribe.env` on trustable-prod
+before running `./deploy.sh prod` — see the deploy.sh header for the exact block.
+
 ### [BUG-003] Live diarization re-transcribes full buffer each interval — low
 **Location**: main.py (`live_record` diarize loop)
 **Status**: open
