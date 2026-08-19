@@ -46,8 +46,13 @@ Status: ✅ done · 🟡 partial · ⬜ planned
 ## Sign-in
 - ✅ **Email one-time-code login** — enter your address, get a 6-digit code, receive an
   httpOnly session cookie (30 days). Self-contained: no dependency on trustable's login.
-- ✅ Allowlist via `ALLOWED_EMAILS`; unknown addresses get the same "code sent" response
-  so the list can't be probed
+- ✅ **Local user store** — permitted addresses live in a `users` table on the data
+  volume, managed with `python auth.py add|remove|list` (no redeploy). `ALLOWED_EMAILS`
+  seeds it once, on an empty database only
+- ✅ Unregistered addresses are told so and pointed at `SUPPORT_EMAIL`, with a
+  "Request access" mailto — no code is sent. Trade-off: the user list is enumerable,
+  bounded by the 5/hour per-IP limit
+- ✅ Removing a user drops their sessions immediately, not at cookie expiry
 - ✅ Codes and session tokens stored sha256-hashed; single-use, 10-min TTL, 5-attempt cap
 - ✅ WebSocket authenticates from the cookie on the handshake — no token in any URL
 - ✅ "Signed in as … · Sign out"; any 401 returns you to the login screen

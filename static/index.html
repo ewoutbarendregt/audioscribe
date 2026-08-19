@@ -110,7 +110,8 @@ const isMobile = () => window.innerWidth <= 640;
 // ---------------------------------------------------------------------------
 const S = {
   screen: 'login',           // login | home | live | review
-  loginStep: 'email',        // email | code
+  loginStep: 'email',        // email | code | unknown
+  supportEmail: 'support@trustable.nl',
   loginEmail: '',
   loginError: '',
   loginBusy: false,
@@ -180,13 +181,35 @@ function render() {
 
 function loginHTML(m) {
   const code = S.loginStep === 'code';
+  const unknown = S.loginStep === 'unknown';
   const err = S.loginError
     ? `<div style="margin-top:14px;padding:9px 14px;border-radius:11px;background:rgba(224,115,94,0.12);border:1px solid rgba(224,115,94,0.3);color:#E0735E;font-size:12.5px;font-weight:600;">${esc(S.loginError)}</div>`
     : '';
   const field = `width:100%;padding:13px 15px;border-radius:13px;border:1px solid rgba(244,239,230,0.16);background:rgba(244,239,230,0.04);color:#F4EFE6;font-family:inherit;font-size:15px;outline:none;`;
   const btn = `width:100%;margin-top:12px;padding:13px;border-radius:13px;border:none;background:${ACCENT};color:#1a1206;font-size:14.5px;font-weight:700;cursor:pointer;box-shadow:0 6px 20px rgba(233,162,59,0.28);`;
 
-  const body = code ? `
+  // The address itself stays unencoded — some mail clients choke on a percent-encoded to:
+  const mailto = 'mailto:' + S.supportEmail
+    + '?subject=' + encodeURIComponent('Audioscribe access request')
+    + '&body=' + encodeURIComponent(
+        'Hello,\n\nI would like access to Audioscribe.\n\nEmail address: '
+        + S.loginEmail + '\n\nThanks,\n');
+
+  const body = unknown ? `
+    <div style="font-size:13.5px;color:#A39B8C;margin-bottom:18px;line-height:1.55;">
+      There's no Audioscribe account for<br>
+      <span style="color:#EDE6D9;font-weight:600;">${esc(S.loginEmail)}</span>, so we
+      haven't sent a code.
+    </div>
+    <div style="padding:14px 16px;border-radius:13px;background:rgba(233,162,59,0.09);border:1px solid rgba(233,162,59,0.26);font-size:13px;color:#D9CFBE;line-height:1.55;">
+      Need access? Email
+      <a href="mailto:${esc(S.supportEmail)}" style="color:${ACCENT};font-weight:600;">${esc(S.supportEmail)}</a>
+      and we'll set you up.
+    </div>
+    <a href="${esc(mailto)}" style="${btn}display:block;box-sizing:border-box;text-align:center;text-decoration:none;">Request access</a>
+    <div style="margin-top:16px;font-size:12.5px;">
+      <span data-act="loginBack" style="color:#6f685c;cursor:pointer;text-decoration:underline;">Use another address</span>
+    </div>` : code ? `
     <div style="font-size:13.5px;color:#A39B8C;margin-bottom:20px;line-height:1.5;">
       We sent a 6-digit code to<br><span style="color:#EDE6D9;font-weight:600;">${esc(S.loginEmail)}</span>
     </div>
@@ -759,7 +782,13 @@ async function submitEmail() {
     S.loginBusy = false;
     if (res.status === 429) { S.loginError = 'Too many requests. Try again later.'; render(); return; }
     if (!res.ok) { S.loginError = 'Could not send the code. Try again.'; render(); return; }
-    // Success is reported even for unknown addresses so the allowlist can't be probed.
+    const data = await res.json().catch(() => ({}));
+    // An address that isn't in the user store gets the support screen rather than a
+    // code field it could never satisfy.
+    if (data.ok === false) {
+      if (data.support_email) S.supportEmail = data.support_email;
+      S.loginStep = 'unknown'; S.loginError = ''; render(); return;
+    }
     S.loginStep = 'code'; S.loginError = ''; render();
   } catch (e) {
     S.loginBusy = false; S.loginError = 'Network error. Try again.'; render();
@@ -801,11 +830,17 @@ async function resendCode() {
   if (S.loginBusy || !S.loginEmail) return;
   S.loginBusy = true; S.loginError = ''; render();
   try {
-    await fetch(apiUrl('api/auth/request-otp'), {
+    const res = await fetch(apiUrl('api/auth/request-otp'), {
       method: 'POST', credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: S.loginEmail }),
     });
+    const data = await res.json().catch(() => ({}));
+    // Access can be revoked between the two steps — send them to support, not a dead end.
+    if (data.ok === false) {
+      if (data.support_email) S.supportEmail = data.support_email;
+      S.loginStep = 'unknown';
+    }
   } catch (e) {}
   S.loginBusy = false; render();
 }

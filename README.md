@@ -127,12 +127,38 @@ nano /opt/trustable/audioscribe.env
 cd /opt/trustable && docker compose --profile audioscribe up -d --force-recreate audioscribe
 ```
 
+### Managing who can sign in
+
+Permitted addresses live in a `users` table in the SQLite database on the
+`audioscribe_data` volume, so changes take effect immediately — no redeploy, no
+container restart. On the first start of an empty database the table is seeded from
+`ALLOWED_EMAILS`; after that the variable is ignored, so removing someone can't be
+undone by the next restart.
+
+```bash
+ssh trustable-staging
+cd /opt/trustable
+COMPOSE="docker compose -f docker-compose.yml -f docker-compose.audioscribe.yml"
+$COMPOSE --profile audioscribe exec audioscribe python auth.py list
+$COMPOSE --profile audioscribe exec audioscribe python auth.py add name@example.com
+$COMPOSE --profile audioscribe exec audioscribe python auth.py remove name@example.com
+```
+
+`remove` also deletes that person's sessions and any pending code, so access ends at
+once rather than whenever their 30-day cookie happens to lapse.
+
+Someone who isn't registered is told so on the sign-in screen and pointed at
+`SUPPORT_EMAIL` — they never receive a code. Note this makes the user list
+enumerable: a stranger can learn whether an address has access. That's an accepted
+trade for a small internal tool, bounded by the 5/hour per-IP limit on code requests.
+
 ### Environment variables
 
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `GEMINI_API_KEY` | Yes | Gemini API key — lives only in `audioscribe.env` on each VPS |
-| `ALLOWED_EMAILS` | Yes | Comma-separated allowlist of addresses that may sign in. Empty = nobody can. |
+| `ALLOWED_EMAILS` | First run only | Comma-separated seed for the `users` table, applied only while that table is empty. After the first start the table is the source of truth — manage it with the CLI below. |
+| `SUPPORT_EMAIL` | No | Address shown to people who aren't registered (default: `support@trustable.nl`) |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` | Yes | Mail transport for the login code. Resend: `smtp.resend.com` / `587` / `resend` / *(API key)*. Unset = codes are logged to stdout instead (local dev only). |
 | `MAIL_FROM` | Yes | Sender address; its domain must be verified with the mail provider |
 | `COOKIE_PATH` | Yes in prod | Cookie scope. `/projects/audioscribe` behind Caddy; `/` locally. |
