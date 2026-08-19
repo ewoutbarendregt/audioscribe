@@ -2,6 +2,32 @@
 
 Auto-updated by agents as they work. Newest entries first.
 
+## [2026-08-19] — Deployed the email sign-in to staging (it had never shipped)
+
+**Session**: claude/ops/deploy-auth-staging
+**Changed**: BUGS.md, DOCUMENTATION.md (no application code)
+**Summary**: The sign-in feature was reported missing on staging. It was not a code
+defect — the work merged to master on 2026-06-14 but `./deploy.sh staging` was never run,
+so the VPS was still serving the pre-auth image from that date (`/health` still returned
+`api_key_configured`, `/api/auth/me` 404'd). Deploying it surfaced a second problem: the
+GHCR push was denied because the local classic PAT had expired (GitHub returned 401 on
+`/user`, so it was dead rather than under-scoped). After re-authenticating `docker login
+ghcr.io` on the dev machine, `./deploy.sh staging` completed: image pushed, overlay
+scp'd, `trustable_audioscribe_data` volume created, container recreated healthy.
+
+**Verified on staging**: `/health` no longer leaks `api_key_configured`; `/api/auth/me`
+401s; anonymous `POST /api/transcribe` 401s (fail-closed confirmed in production
+conditions); a non-allowlisted address gets `{ok:true}` with no mail sent and only a
+"non-allowlisted" log line; `Auth database ready at /data/audioscribe.db`; the sign-in
+screen renders in the browser in place of the old `window.prompt`.
+
+**Not yet exercised**: a real SMTP send. Resend credentials are configured on staging but
+no code has been emailed, so `MAIL_FROM=audioscribe@trustable.nl` is still unproven —
+if trustable.nl is not a verified Resend domain, `request-otp` will 502.
+
+**Prompts used**:
+- "I was expecting a login feature on staging, but I dont see it"
+
 ## [2026-06-14] — Email one-time-code sign-in (replaces the API-token prompt)
 
 **Session**: claude/feat/email-otp-auth
