@@ -130,8 +130,10 @@ async def require_auth(
 async def _startup() -> None:
     auth.init_db()
     auth.purge_expired()
-    if not auth.allowed_emails():
-        logger.warning("ALLOWED_EMAILS is empty — nobody can sign in with a code.")
+    if not auth.list_users():
+        logger.warning(
+            "No users registered — nobody can sign in. Add one with: python auth.py add <email>"
+        )
 
 
 class OtpRequest(BaseModel):
@@ -146,17 +148,24 @@ class OtpVerify(BaseModel):
 @app.post("/api/auth/request-otp")
 @limiter.limit("5/hour")
 async def request_otp(request: Request, payload: OtpRequest):
-    """Email a login code. Always reports success so the allowlist can't be probed."""
+    """Email a login code, but only to an address in the local user store.
+
+    Unknown addresses are told so explicitly, so they can ask support for access
+    instead of waiting for mail that will never arrive. That does make the store
+    enumerable — a deliberate trade for a small internal tool, and the reason the
+    5/hour limit above matters: it caps a prober at five guesses an hour per IP.
+    """
     email = auth.normalize_email(payload.email)
-    if email and email in auth.allowed_emails():
-        code = auth.create_otp(email)
-        try:
-            await asyncio.to_thread(auth.send_otp_email, email, code)
-        except Exception as e:
-            logger.error("Failed to send login code to %s: %s", email, e)
-            raise HTTPException(status_code=502, detail="Could not send the email. Try again.")
-    else:
-        logger.info("Login code requested for non-allowlisted address")
+    if not email or not auth.is_known_user(email):
+        logger.info("Login code requested for unregistered address")
+        return {"ok": False, "reason": "unknown_email", "support_email": auth.SUPPORT_EMAIL}
+
+    code = auth.create_otp(email)
+    try:
+        await asyncio.to_thread(auth.send_otp_email, email, code)
+    except Exception as e:
+        logger.error("Failed to send login code to %s: %s", email, e)
+        raise HTTPException(status_code=502, detail="Could not send the email. Try again.")
     return {"ok": True}
 
 

@@ -2,6 +2,46 @@
 
 Auto-updated by agents as they work. Newest entries first.
 
+## [2026-08-19] — Local user store + "not registered" support screen
+
+**Session**: claude/feat/user-store-support
+**Changed**: auth.py, main.py, static/index.html, README.md, deploy.sh, FEATURES.md
+**Summary**: A code was only ever sent to an address in `ALLOWED_EMAILS`, but everyone
+else got `{ok:true}` and a code field, so an unregistered person sat waiting for mail
+that would never arrive. Two changes: the allowlist moved from an env var into a `users`
+table in the existing SQLite DB, and unknown addresses are now told so and pointed at
+`SUPPORT_EMAIL` (default support@trustable.nl).
+
+`users` is seeded from `ALLOWED_EMAILS` **only while the table is empty**, so the switch
+is invisible on the running deployment and a removal can't be resurrected by the next
+restart. A CLI in `auth.py` (`list` / `add` / `remove`, run via `compose exec`) manages it
+with no redeploy. `remove` also deletes that person's sessions and pending code, so
+revocation is immediate rather than waiting out a 30-day cookie.
+
+`request-otp` now returns `{ok:false, reason:"unknown_email", support_email}` for an
+unregistered address. **This deliberately gives up the anti-enumeration property** the
+endpoint used to have — a prober can now discover which addresses have access, bounded
+by the existing 5/hour per-IP limit. Accepted as a trade for a usable dead-end message
+on a small internal tool; recorded here because it was previously a considered decision
+in the other direction.
+
+Frontend gains a third login step (`unknown`) rendering a support panel plus a
+"Request access" mailto with the attempted address prefilled. `resendCode` handles the
+same response, so access revoked between the two steps lands on the support screen
+instead of failing silently. The mailto target is left unencoded — some clients mishandle
+a percent-encoded `to:`.
+
+**Verified locally**: seeding, case-folding, seed-not-reapplied-after-removal, CLI
+add/remove/list/duplicate/missing, unknown → `{ok:false}`, known → code → session, and
+revoking a signed-in user immediately 401s their existing cookie. In the browser:
+unknown address renders the support screen with a correct mailto, known address reaches
+the code field and signs in, session cookie invisible to JS.
+
+**Prompts used**:
+- "ok the OTP works! now I want the system to only send an OTP when the email address
+  was found in a local store. If the email address was not found, the user may send a
+  request to support@trustable.nl."
+
 ## [2026-08-19] — Deployed the email sign-in to staging (it had never shipped)
 
 **Session**: claude/ops/deploy-auth-staging

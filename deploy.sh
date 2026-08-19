@@ -28,7 +28,7 @@
 #   GEMINI_API_KEY=<paste your Gemini key>
 #   API_TOKEN=<generate with: openssl rand -hex 32>   # legacy/scripted access only
 #   # --- interactive sign-in (emailed one-time code) ---
-#   ALLOWED_EMAILS=you@example.com,colleague@example.com
+#   ALLOWED_EMAILS=you@example.com,colleague@example.com   # seeds the user table once
 #   SMTP_HOST=smtp.resend.com
 #   SMTP_PORT=587
 #   SMTP_USER=resend
@@ -38,8 +38,11 @@
 #   EOF
 #   chmod 640 /opt/trustable/audioscribe.env
 #
-# Sessions live in a SQLite database on the audioscribe_data volume (see
-# docker-compose.audioscribe.yml), so sign-ins survive redeploys.
+# Sessions AND the list of permitted users live in a SQLite database on the
+# audioscribe_data volume (see docker-compose.audioscribe.yml), so sign-ins and
+# accounts survive redeploys. ALLOWED_EMAILS only seeds that list on a brand-new
+# database; afterwards manage users with:
+#   docker compose ... exec audioscribe python auth.py add|remove|list <email>
 
 set -euo pipefail
 

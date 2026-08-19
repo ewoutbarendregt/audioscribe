@@ -7,7 +7,7 @@ but has no other relationship to it, so it keeps its own user gate rather than r
 trustable's session cookie or admin allowlist. That keeps the app portable.
 
 Flow:
-    request-otp  → 6-digit code emailed to an allow-listed address (hash stored)
+    request-otp  → 6-digit code emailed to a *known* address (hash stored)
     verify-otp   → code checked, single-use, exchanged for a session token
     session      → httpOnly cookie, token stored hashed, TTL in days
 
@@ -17,7 +17,10 @@ hashes, so a leaked database cannot be replayed.
 Environment (set in /opt/trustable/audioscribe.env on each VPS):
     DATA_DIR          - directory for the SQLite file (default: /data)
     COOKIE_SECURE     - "false" only for plain-HTTP local dev (default: true)
-    ALLOWED_EMAILS    - comma-separated allowlist; empty = nobody can log in
+    ALLOWED_EMAILS    - seed for the `users` table on an empty database only; after
+                        the first start the table is the source of truth (see the CLI
+                        at the bottom of this file)
+    SUPPORT_EMAIL     - shown to people whose address isn't registered
     SMTP_HOST/PORT/USER/PASS - mail transport (Resend: smtp.resend.com/587/resend/<key>)
     MAIL_FROM         - sender address on a domain verified with the provider
     OTP_TTL_MINUTES   - code lifetime (default: 10)
@@ -42,6 +45,7 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ---------------------------------------------------------------------------
 SESSION_COOKIE = "audioscribe_session"
+SUPPORT_EMAIL = os.environ.get("SUPPORT_EMAIL", "support@trustable.nl")
 
 OTP_TTL_SECONDS = int(os.environ.get("OTP_TTL_MINUTES", "10")) * 60
 SESSION_TTL_SECONDS = int(os.environ.get("SESSION_TTL_DAYS", "30")) * 24 * 3600
@@ -77,7 +81,8 @@ DB_PATH = DATA_DIR / "audioscribe.db"
 
 
 def allowed_emails() -> set:
-    """Read the allowlist at call time so it can change without a code deploy."""
+    """Parse ALLOWED_EMAILS. Only used to seed an empty `users` table — the table,
+    not this variable, decides who may sign in."""
     raw = os.environ.get("ALLOWED_EMAILS", "")
     return {e.strip().lower() for e in raw.split(",") if e.strip()}
 
@@ -118,9 +123,35 @@ def init_db() -> None:
                 created_at REAL NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_sessions_email ON sessions(email);
+            CREATE TABLE IF NOT EXISTS users (
+                email      TEXT PRIMARY KEY,
+                created_at REAL NOT NULL
+            );
             """
         )
+    _seed_users_from_env()
     logger.info("Auth database ready at %s", DB_PATH)
+
+
+def _seed_users_from_env() -> None:
+    """Populate `users` from ALLOWED_EMAILS, but only while the table is empty.
+
+    This exists so the switch from the env-var allowlist to the table is invisible on
+    an existing deployment. Once anyone is in the table the env var is ignored, so
+    removing a user through the CLI can't be undone by the next restart.
+    """
+    seed = allowed_emails()
+    if not seed:
+        return
+    with _connect() as conn:
+        if conn.execute("SELECT 1 FROM users LIMIT 1").fetchone():
+            return
+        now = time.time()
+        conn.executemany(
+            "INSERT OR IGNORE INTO users (email, created_at) VALUES (?, ?)",
+            [(e, now) for e in sorted(seed)],
+        )
+    logger.info("Seeded %d user(s) from ALLOWED_EMAILS", len(seed))
 
 
 def purge_expired() -> None:
@@ -128,6 +159,44 @@ def purge_expired() -> None:
     with _connect() as conn:
         conn.execute("DELETE FROM otp_codes WHERE expires_at < ?", (now,))
         conn.execute("DELETE FROM sessions WHERE expires_at < ?", (now,))
+
+
+# ---------------------------------------------------------------------------
+# Users — the local store that decides who may receive a code at all
+# ---------------------------------------------------------------------------
+def is_known_user(email: str) -> bool:
+    """True if `email` is registered. Callers must pass a normalized address."""
+    if not email:
+        return False
+    with _connect() as conn:
+        return conn.execute("SELECT 1 FROM users WHERE email = ?", (email,)).fetchone() is not None
+
+
+def add_user(email: str) -> bool:
+    """Register an address. Returns False if it was already there."""
+    email = normalize_email(email)
+    if not email:
+        raise ValueError("empty email")
+    with _connect() as conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO users (email, created_at) VALUES (?, ?)", (email, time.time())
+        )
+        return cur.rowcount > 0
+
+
+def remove_user(email: str) -> bool:
+    """Unregister an address and drop its sessions, so access ends immediately."""
+    email = normalize_email(email)
+    with _connect() as conn:
+        cur = conn.execute("DELETE FROM users WHERE email = ?", (email,))
+        conn.execute("DELETE FROM sessions WHERE email = ?", (email,))
+        conn.execute("DELETE FROM otp_codes WHERE email = ?", (email,))
+        return cur.rowcount > 0
+
+
+def list_users() -> list:
+    with _connect() as conn:
+        return [r["email"] for r in conn.execute("SELECT email FROM users ORDER BY email")]
 
 
 # ---------------------------------------------------------------------------
@@ -259,3 +328,41 @@ border-radius:12px;padding:16px;">{code}</div>
             server.login(user, password)
         server.send_message(msg)
     logger.info("Login code sent to %s", email)
+
+
+# ---------------------------------------------------------------------------
+# User management CLI
+#
+# Runs inside the container so it writes to the same /data volume the app reads:
+#   docker compose exec audioscribe python auth.py list
+#   docker compose exec audioscribe python auth.py add name@example.com
+#   docker compose exec audioscribe python auth.py remove name@example.com
+#
+# `remove` also drops that person's sessions, so revoking access takes effect
+# immediately rather than whenever their 30-day cookie happens to lapse.
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    import argparse
+
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    parser = argparse.ArgumentParser(description="Manage Audioscribe users.")
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("list", help="list registered addresses")
+    p_add = sub.add_parser("add", help="register an address")
+    p_add.add_argument("email")
+    p_rm = sub.add_parser("remove", help="unregister an address and end its sessions")
+    p_rm.add_argument("email")
+    args = parser.parse_args()
+
+    init_db()
+
+    if args.command == "list":
+        users = list_users()
+        print("\n".join(users) if users else "(no users registered)")
+    elif args.command == "add":
+        created = add_user(args.email)
+        print(f"{'added' if created else 'already registered'}: {normalize_email(args.email)}")
+    elif args.command == "remove":
+        removed = remove_user(args.email)
+        print(f"{'removed' if removed else 'not found'}: {normalize_email(args.email)}")
