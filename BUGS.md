@@ -31,6 +31,21 @@ transcription, so `user_transcript` never fired.
 line that transcribes input — verified against the API). The native-audio line is 2.5-only;
 there is no 3.x equivalent.
 
+### [BUG-005] Write-scoped GHCR PAT stored in plaintext on staging — medium
+**Location**: /home/deploy/.docker/config.json on trustable-staging
+**Status**: open
+**Found**: 2026-08-19
+**Description**: While debugging the failed GHCR push, `docker login ghcr.io` was run on
+the staging VPS (instead of the dev machine, where the push actually happens). Docker
+warned it stored the credential **unencrypted**. If that PAT is a classic token with
+`write:packages`, it also carries `repo` scope, so a credential that can push images and
+read private repos now sits in cleartext on the VPS. Staging only ever needs to *pull*,
+and it already had working auth before this.
+**Fix**: generate a second classic PAT with **only** `read:packages`, then on staging run
+`docker logout ghcr.io && docker login ghcr.io -u ewoutbarendregt` and paste the
+read-only token. Do not simply log out — that removes the entry and breaks `deploy.sh`'s
+`compose pull`.
+
 ### [BUG-004] Prod will lock out if deployed before its env vars are set — high
 **Location**: /opt/trustable/audioscribe.env on trustable-prod, main.py (`require_auth`)
 **Status**: open — action needed before the next prod deploy
