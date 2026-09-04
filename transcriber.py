@@ -12,6 +12,7 @@ import queue
 import re
 import subprocess
 import tempfile
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -93,12 +94,13 @@ def split_audio_into_chunks(file_path: Path, chunk_minutes: int = MAX_CHUNK_MINU
 
     chunks = []
     temp_dir = tempfile.gettempdir()
+    transcription_id = uuid.uuid4().hex
 
     for i, start_ms in enumerate(range(0, duration_ms, chunk_ms)):
         end_ms = min(start_ms + chunk_ms, duration_ms)
         chunk = audio[start_ms:end_ms]
 
-        chunk_path = Path(temp_dir) / f"transcribe_chunk_{os.getpid()}_{i}.mp3"
+        chunk_path = Path(temp_dir) / f"transcribe_chunk_{transcription_id}_{i}.mp3"
         chunk.export(str(chunk_path), format="mp3")
         chunks.append(chunk_path)
 
