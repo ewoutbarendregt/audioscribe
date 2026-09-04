@@ -107,50 +107,53 @@ def _connect() -> sqlite3.Connection:
 def init_db() -> None:
     """Create tables if absent. Safe to call on every startup."""
     with _connect() as conn:
-        conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS otp_codes (
+        conn.execute("BEGIN IMMEDIATE")
+        users_table_existed = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'users'"
+        ).fetchone() is not None
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS otp_codes (
                 email      TEXT PRIMARY KEY,
                 code_hash  TEXT NOT NULL,
                 expires_at REAL NOT NULL,
                 attempts   INTEGER NOT NULL DEFAULT 0,
                 created_at REAL NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS sessions (
+            )"""
+        )
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS sessions (
                 token_hash TEXT PRIMARY KEY,
                 email      TEXT NOT NULL,
                 expires_at REAL NOT NULL,
                 created_at REAL NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_sessions_email ON sessions(email);
-            CREATE TABLE IF NOT EXISTS users (
+            )"""
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_email ON sessions(email)")
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS users (
                 email      TEXT PRIMARY KEY,
                 created_at REAL NOT NULL
-            );
-            """
+            )"""
         )
-    _seed_users_from_env()
+        if not users_table_existed:
+            _seed_users_from_env(conn)
     logger.info("Auth database ready at %s", DB_PATH)
 
 
-def _seed_users_from_env() -> None:
-    """Populate `users` from ALLOWED_EMAILS, but only while the table is empty.
+def _seed_users_from_env(conn: sqlite3.Connection) -> None:
+    """Populate a newly-created `users` table from ALLOWED_EMAILS.
 
-    This exists so the switch from the env-var allowlist to the table is invisible on
-    an existing deployment. Once anyone is in the table the env var is ignored, so
-    removing a user through the CLI can't be undone by the next restart.
+    init_db calls this only when it created the table, so removing every user through
+    the CLI cannot be undone by a later restart.
     """
     seed = allowed_emails()
     if not seed:
         return
-    with _connect() as conn:
-        if conn.execute("SELECT 1 FROM users LIMIT 1").fetchone():
-            return
-        now = time.time()
-        conn.executemany(
-            "INSERT OR IGNORE INTO users (email, created_at) VALUES (?, ?)",
-            [(e, now) for e in sorted(seed)],
-        )
+    now = time.time()
+    conn.executemany(
+        "INSERT OR IGNORE INTO users (email, created_at) VALUES (?, ?)",
+        [(e, now) for e in sorted(seed)],
+    )
     logger.info("Seeded %d user(s) from ALLOWED_EMAILS", len(seed))
 
 

@@ -157,7 +157,7 @@ trade for a small internal tool, bounded by the 5/hour per-IP limit on code requ
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `GEMINI_API_KEY` | Yes | Gemini API key — lives only in `audioscribe.env` on each VPS |
-| `ALLOWED_EMAILS` | First run only | Comma-separated seed for the `users` table, applied only while that table is empty. After the first start the table is the source of truth — manage it with the CLI below. |
+| `ALLOWED_EMAILS` | First run only | Comma-separated seed applied only when the `users` table is first created. After that the table is the source of truth — manage it with the CLI below. |
 | `SUPPORT_EMAIL` | No | Address shown to people who aren't registered (default: `support@trustable.nl`) |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` | Yes | Mail transport for the login code. Resend: `smtp.resend.com` / `587` / `resend` / *(API key)*. Unset = codes are logged to stdout instead (local dev only). |
 | `MAIL_FROM` | Yes | Sender address; its domain must be verified with the mail provider |
@@ -174,8 +174,8 @@ trade for a small internal tool, bounded by the 5/hour per-IP limit on code requ
 Audioscribe has its own login — it is *hosted* under `trustable.nl/projects/audioscribe`
 but shares nothing else with trustable, so it deliberately does not reuse trustable's
 session or admin allowlist. Users enter their email, receive a 6-digit code, and get an
-httpOnly session cookie valid for `SESSION_TTL_DAYS`. Add or remove people by editing
-`ALLOWED_EMAILS` and recreating the container.
+httpOnly session cookie valid for `SESSION_TTL_DAYS`. Add or remove people with the
+`auth.py` CLI described above; `ALLOWED_EMAILS` is only the first-run seed.
 
 ### Troubleshooting
 
