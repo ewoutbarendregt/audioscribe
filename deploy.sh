@@ -102,22 +102,32 @@ deploy_to_host() {
   # the auth database). It lives here rather than in trustable's docker-compose.yml
   # because that file is owned and overwritten by trustable's own deploy.
   scp -q "${SCRIPT_DIR}/docker-compose.audioscribe.yml" "${host}:/opt/trustable/"
+
+  if ! ssh "${host}" test -f /opt/trustable/audioscribe.env; then
+    echo "ERROR: /opt/trustable/audioscribe.env is missing on ${host}." >&2
+    echo "       Create it before deploying (see deploy.sh header)." >&2
+    exit 1
+  fi
+
+  # --profile audioscribe scopes every command to JUST this service, so the
+  # trustable web/api/db/caddy containers are never touched by this deploy.
+  # The host's GHCR login is not always allowed to read this package (prod's is
+  # left over from trustable's CI), so if the pull fails, ship the image from this
+  # machine instead: docker save | ssh | docker load. No credentials are copied.
+  if ! ssh "${host}" "cd /opt/trustable && AUDIOSCRIBE_IMAGE_TAG='${TAG}' docker compose -f docker-compose.yml -f docker-compose.audioscribe.yml --profile audioscribe pull audioscribe"; then
+    echo "   Pull on ${host} failed — copying ${IMAGE}:${TAG} from this machine instead..."
+    docker pull --platform "${PLATFORM}" "${IMAGE}:${TAG}"
+    docker save "${IMAGE}:${TAG}" | gzip | ssh "${host}" 'gunzip | docker load'
+  fi
+
   ssh "${host}" bash -s -- "${TAG}" << 'REMOTE'
 set -euo pipefail
 TAG="$1"
 cd /opt/trustable
 
-if [ ! -f /opt/trustable/audioscribe.env ]; then
-  echo "ERROR: /opt/trustable/audioscribe.env is missing on this host." >&2
-  echo "       Create it before deploying (see deploy.sh header)." >&2
-  exit 1
-fi
-
-# --profile audioscribe scopes every command to JUST this service, so the
-# trustable web/api/db/caddy containers are never touched by this deploy.
 COMPOSE="docker compose -f docker-compose.yml -f docker-compose.audioscribe.yml"
-AUDIOSCRIBE_IMAGE_TAG="${TAG}" $COMPOSE --profile audioscribe pull audioscribe
-AUDIOSCRIBE_IMAGE_TAG="${TAG}" $COMPOSE --profile audioscribe up -d audioscribe
+# --pull never: the image is already on the host (pulled or loaded above).
+AUDIOSCRIBE_IMAGE_TAG="${TAG}" $COMPOSE --profile audioscribe up -d --pull never audioscribe
 
 # Persist the tag in .env so any later `docker compose up` (e.g. after a reboot or
 # a manual recreate) keeps running this version instead of falling back to :latest.

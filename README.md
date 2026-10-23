@@ -116,7 +116,9 @@ The script builds the image once, pushes it to
 service so the trustable containers are never disturbed. The tag is always a
 version (`v<APP_VERSION>` from `main.py`, never `latest`) and is written to
 `AUDIOSCRIBE_IMAGE_TAG` in `/opt/trustable/.env`, so a later recreate keeps the
-same version.
+same version. If the host cannot pull from GHCR (its login has no access to this
+package — currently the case on prod), the script copies the image from your machine
+with `docker save | ssh | docker load` instead; no credentials are copied.
 
 ### Updating the Gemini API key
 

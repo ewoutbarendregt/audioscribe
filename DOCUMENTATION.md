@@ -2,6 +2,19 @@
 
 Auto-updated by agents as they work. Newest entries first.
 
+## [2026-10-23] — deploy.sh: fall back to docker save/load when the host cannot pull
+
+**Session**: claude/fix/bump-fastapi-starlette-multipart
+**Changed**: deploy.sh, README.md, DOCUMENTATION.md
+**Summary**: Deploying v1.5.1 to prod failed at `compose pull` with `error from
+registry: denied` — prod's GHCR login (left over from trustable's CI) cannot read the
+audioscribe package; staging's can. `deploy_to_host` now checks `audioscribe.env`
+first, tries the pull on the host, and on failure pulls the image locally for
+`$PLATFORM` and streams it over SSH (`docker save | gzip | ssh … docker load`), then
+starts it with `up -d --pull never`. Tested against prod: pull denied → image loaded
+→ running container left untouched (same image), health `1.5.1`.
+**Prompts used**: "Pas deploy.sh aan: als de pull op de host faalt, kopieer het image via docker save/load vanaf de Mac."
+
 ## [2026-10-23] — Security: bump FastAPI/Starlette/python-multipart, pin image tag (v1.5.1)
 
 **Session**: claude/fix/bump-fastapi-starlette-multipart
