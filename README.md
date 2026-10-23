@@ -107,13 +107,18 @@ cd audioscribe
 ./deploy.sh            # build, push, deploy to BOTH staging and prod
 ./deploy.sh staging    # staging only
 ./deploy.sh prod       # prod only
-TAG=v1.2.0 ./deploy.sh # deploy a specific image tag
+TAG=v1.2.0 ./deploy.sh # deploy a specific image tag (default: v<APP_VERSION>)
 ```
 
 The script builds the image once, pushes it to
 `ghcr.io/ewoutbarendregt/audioscribe`, then SSHs to each target host and runs
 `docker compose --profile audioscribe up -d audioscribe` — scoped to just this
-service so the trustable containers are never disturbed.
+service so the trustable containers are never disturbed. The tag is always a
+version (`v<APP_VERSION>` from `main.py`, never `latest`) and is written to
+`AUDIOSCRIBE_IMAGE_TAG` in `/opt/trustable/.env`, so a later recreate keeps the
+same version. If the host cannot pull from GHCR (its login has no access to this
+package — currently the case on prod), the script copies the image from your machine
+with `docker save | ssh | docker load` instead; no credentials are copied.
 
 ### Updating the Gemini API key
 
