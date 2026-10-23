@@ -1354,17 +1354,25 @@ function download(content, filename) {
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
+// Exports are named after the uploaded audio file ('20261019 ewout-alex.m4a' →
+// '20261019 ewout-alex.txt' / '20261019 ewout-alex-summary.txt'); live recordings
+// have no source file and keep the generic names.
+function exportBaseName() {
+  return S.source === 'upload' && S.uploadName ? S.uploadName.replace(/\.[^.]+$/, '') : '';
+}
 function exportSummary() {
   let c = S.title + ' — Summary\n' + '='.repeat(46) + '\n\nSUMMARY\n';
   S.blocks.filter(b => b.type === 'summary').forEach((b, i) => { c += `\n${i + 1}. ${b.text}${b.agreement === 'revised' ? '  [revised]' : ''}`; });
   c += '\n\nACTION ITEMS\n';
   S.blocks.filter(b => b.type === 'action').forEach(b => { c += `\n• ${b.text}${b.owner ? ' — ' + b.owner : ''}${b.due && b.due !== '—' ? ', due ' + b.due : ''}${b.agreement === 'revised' ? '  [revised]' : ''}`; });
-  download(c, 'summary.txt');
+  const base = exportBaseName();
+  download(c, base ? base + '-summary.txt' : 'summary.txt');
 }
 function exportTranscript() {
   let c = S.title + ' — Transcript\n' + '='.repeat(46) + '\n\n';
   S.segments.forEach(s => { c += `${s.speaker}: ${s.text}\n`; });
-  download(c, 'transcript.txt');
+  const base = exportBaseName();
+  download(c, base ? base + '.txt' : 'transcript.txt');
 }
 
 // ===========================================================================
