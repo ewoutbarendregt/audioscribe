@@ -49,7 +49,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 # App version - increment with each deployment
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.5.1"
 
 # Gemini models.
 #   TEXT_MODEL: latest GA Flash (transcription model lives in transcriber.py).

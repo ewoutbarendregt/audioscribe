@@ -11,7 +11,7 @@
 #   ./deploy.sh              # build, push, deploy to BOTH staging and prod
 #   ./deploy.sh staging      # staging only
 #   ./deploy.sh prod         # prod only
-#   TAG=v1.2.0 ./deploy.sh   # deploy a specific image tag (default: latest)
+#   TAG=v1.2.0 ./deploy.sh   # deploy a specific image tag (default: v<APP_VERSION> from main.py)
 #
 # Prerequisites:
 #   - docker login ghcr.io  (echo $GHCR_PAT | docker login ghcr.io -u ewoutbarendregt --password-stdin)
@@ -47,7 +47,14 @@
 set -euo pipefail
 
 IMAGE="ghcr.io/ewoutbarendregt/audioscribe"
-TAG="${TAG:-latest}"
+# Always deploy an immutable version tag (default: v<APP_VERSION> from main.py),
+# never "latest" — a floating tag makes it impossible to tell or roll back what runs.
+APP_VERSION="$(sed -n 's/^APP_VERSION = "\(.*\)"$/\1/p' "$(dirname "${BASH_SOURCE[0]}")/main.py")"
+TAG="${TAG:-v${APP_VERSION}}"
+if [ -z "${TAG#v}" ] || [ "$TAG" = "latest" ]; then
+  echo "Refusing to deploy tag '${TAG}': use a version tag such as v1.5.1." >&2
+  exit 1
+fi
 TARGET="${1:-both}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -111,6 +118,14 @@ fi
 COMPOSE="docker compose -f docker-compose.yml -f docker-compose.audioscribe.yml"
 AUDIOSCRIBE_IMAGE_TAG="${TAG}" $COMPOSE --profile audioscribe pull audioscribe
 AUDIOSCRIBE_IMAGE_TAG="${TAG}" $COMPOSE --profile audioscribe up -d audioscribe
+
+# Persist the tag in .env so any later `docker compose up` (e.g. after a reboot or
+# a manual recreate) keeps running this version instead of falling back to :latest.
+if grep -q '^AUDIOSCRIBE_IMAGE_TAG=' .env; then
+  sed -i "s/^AUDIOSCRIBE_IMAGE_TAG=.*/AUDIOSCRIBE_IMAGE_TAG=${TAG}/" .env
+else
+  printf 'AUDIOSCRIBE_IMAGE_TAG=%s\n' "${TAG}" >> .env
+fi
 docker image prune -f
 
 sleep 3

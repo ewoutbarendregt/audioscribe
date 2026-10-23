@@ -2,6 +2,24 @@
 
 Auto-updated by agents as they work. Newest entries first.
 
+## [2026-10-23] — Security: bump FastAPI/Starlette/python-multipart, pin image tag (v1.5.1)
+
+**Session**: claude/fix/bump-fastapi-starlette-multipart
+**Changed**: requirements.txt, main.py, deploy.sh, README.md, DOCUMENTATION.md
+**Summary**: Security review of the Trustable VPSes found the running image on
+starlette 0.41.3 (14 advisories) and python-multipart 0.0.19 (12 advisories, mostly
+DoS in multipart/header parsing). Multipart bodies are parsed before `require_auth`
+runs, so the email login does not shield `/api/transcribe` from these. Bumped
+fastapi 0.115.6 → 0.161.1, pinned starlette 1.9.0 and python-multipart 0.0.32;
+pip-audit on the built image now reports no known vulnerabilities. `deploy.sh` now
+deploys `v<APP_VERSION>` by default, refuses `latest`, and records the tag in
+`/opt/trustable/.env` so the container can no longer silently drift to `:latest`.
+Verified in a local container: unit tests (4/4), `/health`, index, 401 without auth,
+authenticated upload streams SSE progress, form validation (422 on `speakers=99`).
+Note: FastAPI warns that `@app.on_event("startup")` is deprecated (still works);
+moving to a lifespan handler is a follow-up.
+**Prompts used**: "Ja, werk FastAPI/starlette/python-multipart bij in ~/src/audioscribe, test het en zet een vaste image-tag in plaats van :latest."
+
 ## [2026-08-19] — Local user store + "not registered" support screen
 
 **Session**: claude/feat/user-store-support
