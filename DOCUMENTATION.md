@@ -2,6 +2,16 @@
 
 Auto-updated by agents as they work. Newest entries first.
 
+## [2026-10-23] — Release 1.5.2 to staging
+
+**Session**: claude/chore/release-1.5.2
+**Changed**: main.py, DOCUMENTATION.md
+**Summary**: Bumped `APP_VERSION` 1.5.1 → 1.5.2 so the export-filename change ships
+under a new immutable tag instead of overwriting `v1.5.1` (which prod runs). Deployed
+with `./deploy.sh staging`: the host pull worked, `/health` reports `1.5.2` and the
+container is healthy. Prod is still on 1.5.1.
+**Prompts used**: "Deploy this to staging with deploy.sh"
+
 ## [2026-10-23] — Name exported transcript/summary after the uploaded file
 
 **Session**: claude/feat/output-filenames-match-input
