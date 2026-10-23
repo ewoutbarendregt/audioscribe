@@ -2,6 +2,17 @@
 
 Auto-updated by agents as they work. Newest entries first.
 
+## [2026-10-23] — Release 1.5.2 to prod
+
+**Session**: claude/docs/log-1.5.2-prod
+**Changed**: DOCUMENTATION.md
+**Summary**: Deployed v1.5.2 with `./deploy.sh prod`. The host pull was again denied
+by GHCR, so the image was copied over with the docker save/load fallback. The public
+`/health` reports `1.5.2` and the served page has the new export naming. Staging and
+prod both run 1.5.2. The old 1.5.1 image was pruned from prod, so a rollback would
+have to copy it over again (`TAG=v1.5.1 ./deploy.sh prod`).
+**Prompts used**: "Deploy 1.5.2 to prod with deploy.sh"
+
 ## [2026-10-23] — Release 1.5.2 to staging
 
 **Session**: claude/chore/release-1.5.2
