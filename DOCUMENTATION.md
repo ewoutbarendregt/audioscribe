@@ -2,6 +2,16 @@
 
 Auto-updated by agents as they work. Newest entries first.
 
+## [2026-10-23] — Name exported transcript/summary after the uploaded file
+
+**Session**: claude/feat/output-filenames-match-input
+**Changed**: static/index.html, FEATURES.md, DOCUMENTATION.md
+**Summary**: Exports were always saved as `transcript.txt` / `summary.txt`. For an
+uploaded file they now take its base name: `20261019 ewout-alex.m4a` →
+`20261019 ewout-alex.txt` and `20261019 ewout-alex-summary.txt`. Live recordings have
+no source file and keep the generic names.
+**Prompts used**: "I want the outputfiles to have the same name as the input file, e.g. the name of the transcript file for '20261019 ewout-alex.m4a' must become '20261019 ewout-alex.txt' and the summary '20261019 ewout-alex-summary.txt'"
+
 ## [2026-10-23] — deploy.sh: fall back to docker save/load when the host cannot pull
 
 **Session**: claude/fix/bump-fastapi-starlette-multipart
