@@ -2,6 +2,19 @@
 
 Auto-updated by agents as they work. Newest entries first.
 
+## [2026-11-24] — First AudioScribe deploy to Contabo prod (v1.5.2)
+
+**Session**: claude/docs/log-contabo-prod-deploy
+**Changed**: DOCUMENTATION.md
+**Summary**: Merged PR #3 and ran `./deploy.sh prod --yes` from `origin/master` (`deb535a`) to
+`trustable-contabo`. The image went over via `docker save | ssh docker load`, the container was
+recreated and became healthy, and the run ended with `REMOTE-DEPLOY-OK`. It runs
+`audioscribe:v1.5.2` (same version as before, rebuilt), the public `/health` reports `1.5.2`,
+`audioscribe_data` is still mounted at `/data`, and the user table is intact. Compose warned that
+the `trustable_proxy` network and `trustable_audioscribe_data` volume "were not created by compose"
+(they were created by hand during the Hetzner→Contabo move); harmless.
+**Prompts used**: "merge it and deploy to prod"
+
 ## [2026-11-24] — deploy.sh: local deploy to Contabo prod, no registry, file-based server steps
 
 **Session**: claude/chore/local-deploy-contabo
