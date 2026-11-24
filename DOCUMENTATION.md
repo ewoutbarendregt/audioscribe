@@ -2,6 +2,18 @@
 
 Auto-updated by agents as they work. Newest entries first.
 
+## [2026-11-24] — First AudioScribe deploy to staging on drmelfi-vps (v1.5.2)
+
+**Session**: claude/docs/log-staging-deploy
+**Changed**: DOCUMENTATION.md
+**Summary**: Trustable staging moved to drmelfi-vps (Contabo, 5.189.167.22; SSH alias
+`trustable-staging`). Created `/opt/trustable/audioscribe.env` there from the prod file (same Gemini
+key, `ALLOWED_EMAILS` and Resend mail settings, new `API_TOKEN`), then ran `./deploy.sh staging --yes`
+from `origin/master` (`ab0ec4c`). The container came up healthy with a new, empty
+`audioscribe_data` volume, the run ended with `REMOTE-DEPLOY-OK`, and
+`https://staging.trustable.nl/projects/audioscribe/` and `/health` return 200 (`1.5.2`).
+**Prompts used**: "deploy audioscribe to staging too"
+
 ## [2026-11-24] — First AudioScribe deploy to Contabo prod (v1.5.2)
 
 **Session**: claude/docs/log-contabo-prod-deploy
