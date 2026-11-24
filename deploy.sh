@@ -1,29 +1,38 @@
 #!/usr/bin/env bash
-# Deploy AudioScribe to the Trustable VPS fleet (staging + prod).
+# Deploy AudioScribe from this Mac to the Trustable servers (staging + prod).
+# There is no GitHub Actions deploy: this script is the only thing that builds,
+# ships and restarts AudioScribe.
 #
 # AudioScribe runs as a profile-gated service inside the trustable
-# docker-compose stack on each VPS. Its release cycle is independent of the
-# trustable web/api deploys: the trustable workflows never enable the
-# "audioscribe" profile, so they never touch this container. This script is
-# the ONLY thing that builds, ships, and restarts AudioScribe.
+# docker-compose stack (/opt/trustable) on each server. Trustable's own deploys
+# never enable the "audioscribe" profile, so they never touch this container.
 #
 # Usage:
-#   ./deploy.sh              # build, push, deploy to BOTH staging and prod
-#   ./deploy.sh staging      # staging only
-#   ./deploy.sh prod         # prod only
-#   TAG=v1.2.0 ./deploy.sh   # deploy a specific image tag (default: v<APP_VERSION> from main.py)
+#   ./deploy.sh [staging|prod|both] [options]   # default target: both
+#     --ref <git-ref>   deploy this commit/branch/tag (default: origin/master)
+#     --dry-run         build the image and check the server; change nothing on it
+#     --yes, -y         skip the confirmation prompt
 #
-# Prerequisites:
-#   - docker login ghcr.io  (echo $GHCR_PAT | docker login ghcr.io -u ewoutbarendregt --password-stdin)
-#   - SSH access to each target. By default this uses the SSH config aliases
-#     'trustable-staging' and 'trustable-prod' (which already encode the deploy
-#     user + key). Override with STAGING_SSH_HOST / PROD_SSH_HOST if needed.
-#   - /opt/trustable/audioscribe.env present on each target VPS (see below)
+# What it does:
+#   1. git fetch; check out <ref> into a temporary worktree, so uncommitted local
+#      work is never deployed and an old ref really builds the old code
+#   2. image tag = v<APP_VERSION> from that ref's main.py (never "latest")
+#   3. preflight per host: ssh works, audioscribe.env exists, show the running tag
+#      and whether the compose overlay changes
+#   4. build linux/amd64 with docker buildx (--load, no registry push)
+#   5. per host: docker save | gzip | ssh docker load, copy the compose overlay,
+#      upload the server steps as a file and run them with `ssh -n`; the run only
+#      counts if it prints REMOTE-DEPLOY-OK, then the running image tag is verified
+#
+# Hosts (~/.ssh/config aliases, user deploy):
+#   prod    = trustable-contabo (Contabo, 144.91.87.103; moved from Hetzner
+#             trustable-prod on 2026-11-24). Override with PROD_SSH_HOST.
+#   staging = trustable-staging. Override with STAGING_SSH_HOST.
 #
 # First-time setup on EACH VPS (staging and prod), run once.
 # The env file is the single source of truth for the key — nothing else reads
 # it. Keep a backup wherever you normally store secrets.
-#   ssh trustable-staging   # then repeat for trustable-prod
+#   ssh trustable-staging   # then repeat for trustable-contabo (prod)
 #   cat > /opt/trustable/audioscribe.env << 'EOF'
 #   GEMINI_API_KEY=<paste your Gemini key>
 #   API_TOKEN=<generate with: openssl rand -hex 32>   # legacy/scripted access only
@@ -45,116 +54,163 @@
 #   docker compose ... exec audioscribe python auth.py add|remove|list <email>
 
 set -euo pipefail
+usage() { sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
-IMAGE="ghcr.io/ewoutbarendregt/audioscribe"
-# Always deploy an immutable version tag (default: v<APP_VERSION> from main.py),
-# never "latest" — a floating tag makes it impossible to tell or roll back what runs.
-APP_VERSION="$(sed -n 's/^APP_VERSION = "\(.*\)"$/\1/p' "$(dirname "${BASH_SOURCE[0]}")/main.py")"
-TAG="${TAG:-v${APP_VERSION}}"
-if [ -z "${TAG#v}" ] || [ "$TAG" = "latest" ]; then
-  echo "Refusing to deploy tag '${TAG}': use a version tag such as v1.5.1." >&2
+TARGET="both"
+case "${1:-}" in
+  staging|prod|both) TARGET="$1"; shift ;;
+esac
+REF="origin/master"; DRY_RUN=0; YES=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --ref) REF="${2:?--ref needs a value}"; shift 2 ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    --yes|-y) YES=1; shift ;;
+    -h|--help) usage 0 ;;
+    *) echo "Unknown option: $1 (target must come first: staging | prod | both)" >&2; usage 1 ;;
+  esac
+done
+if [ -n "${TAG:-}" ]; then
+  echo "TAG is no longer supported: the tag comes from the deployed ref's APP_VERSION." >&2
+  echo "To deploy an older version, use --ref <commit or tag of that version>." >&2
   exit 1
 fi
-TARGET="${1:-both}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# SSH targets — default to the ~/.ssh/config aliases (user + key baked in).
+IMAGE="ghcr.io/ewoutbarendregt/audioscribe"
+PLATFORM="${PLATFORM:-linux/amd64}"   # the servers are x86_64; matters on Apple Silicon
+REMOTE_DIR="/opt/trustable"
 STAGING_SSH_HOST="${STAGING_SSH_HOST:-trustable-staging}"
-PROD_SSH_HOST="${PROD_SSH_HOST:-trustable-prod}"
+PROD_SSH_HOST="${PROD_SSH_HOST:-trustable-contabo}"   # Contabo since 2026-11-24 (was trustable-prod on Hetzner)
 
-# ---------------------------------------------------------------------------
-# Resolve target hosts
-# ---------------------------------------------------------------------------
-declare -a HOSTS=()
+declare -a HOSTS=() URLS=()
 case "$TARGET" in
-  staging) HOSTS+=("$STAGING_SSH_HOST") ;;
-  prod)    HOSTS+=("$PROD_SSH_HOST") ;;
-  both)
-    HOSTS+=("$STAGING_SSH_HOST")
-    HOSTS+=("$PROD_SSH_HOST")
-    ;;
-  *)
-    echo "Unknown target '$TARGET'. Use: staging | prod | both" >&2
-    exit 1
-    ;;
+  staging) HOSTS=("$STAGING_SSH_HOST"); URLS=("https://staging.trustable.nl/projects/audioscribe/") ;;
+  prod)    HOSTS=("$PROD_SSH_HOST");    URLS=("https://trustable.nl/projects/audioscribe/") ;;
+  both)    HOSTS=("$STAGING_SSH_HOST" "$PROD_SSH_HOST")
+           URLS=("https://staging.trustable.nl/projects/audioscribe/" "https://trustable.nl/projects/audioscribe/") ;;
 esac
 
-echo "=== AudioScribe deploy: ${IMAGE}:${TAG} → ${TARGET} ==="
-echo ""
+log() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
+die() { printf '\033[31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 
-# ---------------------------------------------------------------------------
-# 1. Build (for the VPS architecture) and push, in one step
-#    The Trustable VPSes are x86_64, so we always target linux/amd64 — this
-#    matters when building from an arm64 (Apple Silicon) machine.
-# ---------------------------------------------------------------------------
-PLATFORM="${PLATFORM:-linux/amd64}"
-echo "→ Building (${PLATFORM}) and pushing ${IMAGE}:${TAG} to GHCR..."
-docker buildx build --platform "${PLATFORM}" -t "${IMAGE}:${TAG}" --push "${SCRIPT_DIR}"
-echo ""
+REPO_ROOT="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
+# Short path: the ssh ControlPath socket must stay under ~104 characters on macOS.
+WORK="$(mktemp -d /tmp/asdeploy.XXXXXX)"
 
-# ---------------------------------------------------------------------------
-# 3. Roll out to each target host
-# ---------------------------------------------------------------------------
-deploy_to_host() {
-  local host="$1"
-  echo "→ Deploying to ${host}..."
-  # Ship the AudioScribe-only compose overlay (declares the /data volume that holds
-  # the auth database). It lives here rather than in trustable's docker-compose.yml
-  # because that file is owned and overwritten by trustable's own deploy.
-  scp -q "${SCRIPT_DIR}/docker-compose.audioscribe.yml" "${host}:/opt/trustable/"
+# One multiplexed ssh connection per host: sshd on Contabo resets bursts of new
+# connections, so every ssh/scp below reuses the master connection.
+SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=10 -o ControlMaster=auto
+          -o "ControlPath=$WORK/cm-%C" -o ControlPersist=300)
+rssh() { ssh "${SSH_OPTS[@]}" "$@"; }
+rscp() { scp -q "${SSH_OPTS[@]}" "$@"; }
 
-  if ! ssh "${host}" test -f /opt/trustable/audioscribe.env; then
-    echo "ERROR: /opt/trustable/audioscribe.env is missing on ${host}." >&2
-    echo "       Create it before deploying (see deploy.sh header)." >&2
-    exit 1
+cleanup() {
+  for h in "${HOSTS[@]}"; do ssh "${SSH_OPTS[@]}" -O exit "$h" >/dev/null 2>&1 || true; done
+  git -C "$REPO_ROOT" worktree remove --force "$WORK/src" >/dev/null 2>&1 || true
+  rm -rf "$WORK"
+}
+trap cleanup EXIT
+
+# ── 1. Source ──────────────────────────────────────────────────────────────────
+log "Fetching and resolving $REF"
+git -C "$REPO_ROOT" fetch --quiet origin
+SHA="$(git -C "$REPO_ROOT" rev-parse --verify --quiet "$REF^{commit}")" || die "Unknown ref: $REF"
+git -C "$REPO_ROOT" worktree add --quiet --detach "$WORK/src" "$SHA"
+SRC="$WORK/src"
+APP_VERSION="$(sed -n 's/^APP_VERSION = "\(.*\)"$/\1/p' "$SRC/main.py")"
+[ -n "$APP_VERSION" ] || die "No APP_VERSION found in main.py at $REF"
+TAG="v${APP_VERSION}"
+echo "AudioScribe ${IMAGE}:${TAG} ← $REF (${SHA:0:7}): $(git -C "$REPO_ROOT" log -1 --format=%s "$SHA")"
+echo "Target: $TARGET (${HOSTS[*]})$([ "$DRY_RUN" = 1 ] && echo ', DRY RUN')"
+
+# ── 2. Preflight ───────────────────────────────────────────────────────────────
+log "Preflight"
+command -v docker >/dev/null || die "docker not found"
+docker buildx version >/dev/null 2>&1 || die "docker buildx not available"
+declare -a PREV=()
+for host in "${HOSTS[@]}"; do
+  rssh "$host" true || die "Cannot ssh to $host"
+  rssh "$host" "test -f $REMOTE_DIR/audioscribe.env" \
+    || die "$REMOTE_DIR/audioscribe.env is missing on $host. Create it first (see the deploy.sh header)."
+  rssh "$host" "test -f $REMOTE_DIR/docker-compose.yml && test -f $REMOTE_DIR/.env" \
+    || die "$REMOTE_DIR/docker-compose.yml or .env missing on $host"
+  running="$(rssh "$host" "docker inspect --format '{{.Config.Image}}' trustable-audioscribe-1 2>/dev/null" || true)"
+  PREV+=("${running:-none}")
+  echo "$host: running ${running:-nothing}; .env $(rssh "$host" "grep -m1 '^AUDIOSCRIBE_IMAGE_TAG=' $REMOTE_DIR/.env" || echo 'has no AUDIOSCRIBE_IMAGE_TAG')"
+  if rssh "$host" "cat $REMOTE_DIR/docker-compose.audioscribe.yml 2>/dev/null" | cmp -s - "$SRC/docker-compose.audioscribe.yml"; then
+    echo "$host: docker-compose.audioscribe.yml unchanged"
+  else
+    echo "$host: docker-compose.audioscribe.yml will change:"
+    diff -u <(rssh "$host" "cat $REMOTE_DIR/docker-compose.audioscribe.yml 2>/dev/null" || true) \
+      "$SRC/docker-compose.audioscribe.yml" | sed 's/^/    /' || true
   fi
+done
 
-  # --profile audioscribe scopes every command to JUST this service, so the
-  # trustable web/api/db/caddy containers are never touched by this deploy.
-  # The host's GHCR login is not always allowed to read this package (prod's is
-  # left over from trustable's CI), so if the pull fails, ship the image from this
-  # machine instead: docker save | ssh | docker load. No credentials are copied.
-  if ! ssh "${host}" "cd /opt/trustable && AUDIOSCRIBE_IMAGE_TAG='${TAG}' docker compose -f docker-compose.yml -f docker-compose.audioscribe.yml --profile audioscribe pull audioscribe"; then
-    echo "   Pull on ${host} failed — copying ${IMAGE}:${TAG} from this machine instead..."
-    docker pull --platform "${PLATFORM}" "${IMAGE}:${TAG}"
-    docker save "${IMAGE}:${TAG}" | gzip | ssh "${host}" 'gunzip | docker load'
-  fi
+# ── 3. Build ───────────────────────────────────────────────────────────────────
+log "Building ${IMAGE}:${TAG} (${PLATFORM})"
+docker buildx build --platform "$PLATFORM" --load -t "${IMAGE}:${TAG}" "$SRC"
 
-  ssh "${host}" bash -s -- "${TAG}" << 'REMOTE'
+if [ "$DRY_RUN" = 1 ]; then
+  log "Dry run: image built, nothing changed on ${HOSTS[*]}"
+  exit 0
+fi
+
+if [ "$YES" != 1 ]; then
+  printf '\nDeploy %s (%s) to %s? [y/N] ' "$TAG" "$REF" "$TARGET"
+  read -r answer
+  [ "$answer" = "y" ] || [ "$answer" = "Y" ] || die "Aborted"
+fi
+
+# ── 4. Server steps ────────────────────────────────────────────────────────────
+# Uploaded as a file and run with `ssh -n`, never piped via `bash -s`/heredoc:
+# a stdin-reading command would swallow the rest of the script while ssh still
+# exits 0. The end marker catches any run that stops early.
+cat > "$WORK/remote.sh" <<'REMOTE'
 set -euo pipefail
 TAG="$1"
 cd /opt/trustable
+# --profile audioscribe scopes every command to JUST this service, so the
+# trustable web/api/db/caddy containers are never touched by this deploy.
+COMPOSE="docker compose -f docker-compose.yml -f docker-compose.audioscribe.yml --profile audioscribe"
 
-COMPOSE="docker compose -f docker-compose.yml -f docker-compose.audioscribe.yml"
-# --pull never: the image is already on the host (pulled or loaded above).
-AUDIOSCRIBE_IMAGE_TAG="${TAG}" $COMPOSE --profile audioscribe up -d --pull never audioscribe
+mv docker-compose.audioscribe.yml.new docker-compose.audioscribe.yml
+# --pull never: the image was just loaded onto this host.
+AUDIOSCRIBE_IMAGE_TAG="$TAG" $COMPOSE up -d --pull never audioscribe < /dev/null
 
-# Persist the tag in .env so any later `docker compose up` (e.g. after a reboot or
-# a manual recreate) keeps running this version instead of falling back to :latest.
+# Persist the tag in .env so a later `docker compose up` (reboot, manual recreate)
+# keeps this version instead of falling back to :latest.
 if grep -q '^AUDIOSCRIBE_IMAGE_TAG=' .env; then
   sed -i "s/^AUDIOSCRIBE_IMAGE_TAG=.*/AUDIOSCRIBE_IMAGE_TAG=${TAG}/" .env
 else
-  printf 'AUDIOSCRIBE_IMAGE_TAG=%s\n' "${TAG}" >> .env
+  printf 'AUDIOSCRIBE_IMAGE_TAG=%s\n' "$TAG" >> .env
 fi
-docker image prune -f
 
-sleep 3
-$COMPOSE --profile audioscribe ps audioscribe
+echo "Waiting for audioscribe to become healthy"
+timeout 90 sh -c "until $COMPOSE ps audioscribe < /dev/null | grep -q '(healthy)'; do sleep 3; done"
+mkdir -p .deploy
+echo "$(date -u +%FT%TZ) audioscribe $TAG" >> .deploy/history.log
+docker image prune -f >/dev/null
+$COMPOSE ps audioscribe < /dev/null
+echo "REMOTE-DEPLOY-OK"
 REMOTE
-  echo "   ✓ ${host} done."
-  echo ""
-}
 
-for host in "${HOSTS[@]}"; do
-  deploy_to_host "$host"
+for i in "${!HOSTS[@]}"; do
+  host="${HOSTS[$i]}"
+  log "Deploying ${TAG} to ${host}"
+  echo "Uploading image"
+  docker save "${IMAGE}:${TAG}" | gzip -1 | rssh "$host" 'gunzip | docker load'
+  rscp "$SRC/docker-compose.audioscribe.yml" "$host:$REMOTE_DIR/docker-compose.audioscribe.yml.new"
+  rssh -n "$host" "mkdir -p $REMOTE_DIR/.deploy"
+  rscp "$WORK/remote.sh" "$host:$REMOTE_DIR/.deploy/audioscribe-remote.sh"
+  rssh -n "$host" "bash $REMOTE_DIR/.deploy/audioscribe-remote.sh '$TAG' < /dev/null" | tee "$WORK/remote-$i.log"
+  grep -q '^REMOTE-DEPLOY-OK$' "$WORK/remote-$i.log" || die "Server steps on $host did not finish (see output above)"
+
+  running="$(rssh -n "$host" "docker inspect --format '{{.Config.Image}}' trustable-audioscribe-1")"
+  [ "$running" = "${IMAGE}:${TAG}" ] || die "$host runs '$running', expected ${IMAGE}:${TAG}"
+  echo "✓ $host runs $running (was ${PREV[$i]})"
+  curl -fsS -m 15 "${URLS[$i]}health" && echo || echo "WARNING: ${URLS[$i]}health did not answer" >&2
 done
 
-echo "=== Deploy complete ==="
-case "$TARGET" in
-  staging) echo "   https://staging.trustable.nl/projects/audioscribe/" ;;
-  prod)    echo "   https://trustable.nl/projects/audioscribe/" ;;
-  both)
-    echo "   https://staging.trustable.nl/projects/audioscribe/"
-    echo "   https://trustable.nl/projects/audioscribe/"
-    ;;
-esac
+log "Deployed ${TAG} to ${TARGET}"
+printf '   %s\n' "${URLS[@]}"
+echo "Rollback: ./deploy.sh $TARGET --ref <commit of the previous version>   (previous: ${PREV[*]})"
