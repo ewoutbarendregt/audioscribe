@@ -2,6 +2,27 @@
 
 Known issues, bug reports, fix status.
 
+### [BUG-007] AudioScribe deploys still targeted the old Hetzner prod and piped server steps over stdin — high
+**Location**: deploy.sh
+**Status**: fixed
+**Found**: 2026-11-24
+**Description**: Prod moved to the Contabo VPS (`trustable-contabo`) on 2026-11-24, but
+`deploy.sh prod` still defaulted to `trustable-prod` (Hetzner, now only a Caddy forwarder).
+The server steps were also sent as a heredoc to `ssh host bash -s`, so any stdin-reading
+command could swallow the rest of the script while ssh still exited 0.
+**Fix**: prod defaults to `trustable-contabo`; server steps are uploaded as a file, run with
+`ssh -n`, every compose call gets `< /dev/null`, and the deploy fails unless the output ends
+with `REMOTE-DEPLOY-OK` and the container runs the new tag. Branch `claude/chore/local-deploy-contabo`.
+
+### [BUG-006] README key-rotation recreate dropped the auth-database volume — medium
+**Location**: README.md ("Updating the Gemini API key")
+**Status**: fixed
+**Found**: 2026-11-24
+**Description**: The documented `docker compose --profile audioscribe up -d --force-recreate audioscribe`
+leaves out `-f docker-compose.audioscribe.yml`, so the recreated container would start without the
+`audioscribe_data:/data` mount and lose sessions and the user table until the next deploy.
+**Fix**: the command now passes both compose files, like `deploy.sh`.
+
 ### [BUG-001] Live-mode turns are not diarized — medium
 **Location**: main.py (`live_record`, `_diarize_pcm`), static/index.html
 **Status**: fixed
@@ -43,8 +64,9 @@ read private repos now sits in cleartext on the VPS. Staging only ever needs to 
 and it already had working auth before this.
 **Fix**: generate a second classic PAT with **only** `read:packages`, then on staging run
 `docker logout ghcr.io && docker login ghcr.io -u ewoutbarendregt` and paste the
-read-only token. Do not simply log out — that removes the entry and breaks `deploy.sh`'s
-`compose pull`.
+read-only token. Since 2026-11-24 `deploy.sh` no longer pulls from GHCR on the hosts
+(it ships the image with `docker save | ssh docker load`), so a plain
+`docker logout ghcr.io` on staging no longer breaks AudioScribe deploys.
 
 ### [BUG-004] Prod will lock out if deployed before its env vars are set — high
 **Location**: /opt/trustable/audioscribe.env on trustable-prod, main.py (`require_auth`)

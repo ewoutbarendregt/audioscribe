@@ -2,6 +2,26 @@
 
 Auto-updated by agents as they work. Newest entries first.
 
+## [2026-11-24] — deploy.sh: local deploy to Contabo prod, no registry, file-based server steps
+
+**Session**: claude/chore/local-deploy-contabo
+**Changed**: deploy.sh, README.md, BUGS.md, DOCUMENTATION.md
+**Summary**: Prod moved from Hetzner (`trustable-prod`) to the Contabo VPS
+(`trustable-contabo`, 144.91.87.103), so `deploy.sh prod` now targets that alias
+(override: `PROD_SSH_HOST`); staging is unchanged. Deploys run from Ewout's Mac only —
+the repo has no GitHub Actions workflows. Modelled on trustable.nl's `scripts/deploy.sh`:
+builds from a clean worktree of `--ref` (default `origin/master`, tag `v<APP_VERSION>` of
+that ref, `TAG=` removed), `docker buildx --load` for linux/amd64, ships with
+`docker save | gzip | ssh docker load` (no GHCR push/pull), uploads the server steps to
+`/opt/trustable/.deploy/audioscribe-remote.sh` and runs them with `ssh -n`, requires
+`REMOTE-DEPLOY-OK` and verifies the running tag; adds `--dry-run`, a confirmation prompt
+(`--yes` skips it), a healthy-wait and one multiplexed ssh connection per host (Contabo's
+sshd resets connection bursts). Server layout on Contabo checked read-only: same
+`/opt/trustable` paths, overlay identical, `.env` has `AUDIOSCRIBE_IMAGE_TAG=v1.5.2`.
+Also fixed the README key-rotation command, which left out the compose overlay (BUG-006).
+No APP_VERSION bump: the app code is unchanged.
+**Prompts used**: "Make AudioScribe's local deploy target the new Contabo production server and remove any remaining GitHub Actions deploy dependency." (task from the coordinating session)
+
 ## [2026-10-23] — Release 1.5.2 to prod
 
 **Session**: claude/docs/log-1.5.2-prod
